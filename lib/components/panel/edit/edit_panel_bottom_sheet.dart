@@ -165,7 +165,6 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
   Future<void> _saveChanges() async {
     if (_isLoading || _isSuccess) return;
 
-    // --- [PERUBAHAN] Validasi custom sebelum validasi form ---
     final noPanel = _noPanelController.text.trim();
     final noWbs = _noWbsController.text.trim();
     final project = _projectController.text.trim();
@@ -178,16 +177,33 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
             content: Text(
               'Harap isi salah satu dari No. Panel, No. WBS, Project, atau No. PP.',
             ),
-            backgroundColor: Colors.red,
+            backgroundColor: AppColors.red,
           ),
         );
       }
       return;
     }
-    // --- [AKHIR PERUBAHAN] ---
 
     if (_formKey.currentState!.validate()) {
       setState(() => _isLoading = true);
+
+      // Cek No. PP jika diubah
+      if (noPp.isNotEmpty && noPp != widget.panelData.panel.noPp) {
+        final isTaken = await DatabaseHelper.instance.isNoPpTaken(noPp);
+        if (isTaken) {
+          if (mounted) {
+            setState(() => _isLoading = false);
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('No. PP sudah ada. Gunakan nomor lain.'),
+                backgroundColor: AppColors.red,
+              ),
+            );
+          }
+          return;
+        }
+      }
+      // --- [AKHIR PERUBAHAN] ---
 
       _panel.noPanel = noPanel;
       _panel.noWbs = noWbs;
@@ -262,12 +278,29 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
       } catch (e) {
         if (mounted) {
           setState(() => _isLoading = false);
+
+          // --- [PERUBAHAN] Pesan error fallback lebih spesifik ---
+          String errorMessage;
+          final errorString = e.toString().toLowerCase();
+          if (errorString.contains('duplicate key')) {
+            if (errorString.contains('panels_no_panel_key')) {
+              errorMessage =
+                  'Gagal: No. Panel yang Anda masukkan sudah terdaftar.';
+            } else if (errorString.contains('panels_pkey') ||
+                errorString.contains('no_pp')) {
+              errorMessage =
+                  'Gagal: No. PP yang Anda masukkan sudah terdaftar.';
+            } else {
+              errorMessage = 'Gagal: Terdapat data duplikat.';
+            }
+          } else {
+            errorMessage = 'Gagal menyimpan: Terjadi kesalahan tidak terduga.';
+          }
+
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Gagal menyimpan: ${e.toString()}'),
-              backgroundColor: Colors.red,
-            ),
+            SnackBar(content: Text(errorMessage), backgroundColor: Colors.red),
           );
+          // --- [AKHIR PERUBAHAN] ---
         }
       }
     }
@@ -277,7 +310,6 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      // --- [PERUBAHAN] Latar belakang eksplisit warna putih ---
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
@@ -306,7 +338,6 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
               const SizedBox(height: 16),
               const Text(
                 'Hapus Panel?',
-                // --- [PERUBAHAN] Ketebalan font dari bold menjadi w500 ---
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500),
                 textAlign: TextAlign.center,
               ),
@@ -468,7 +499,6 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
                               label: "Progress",
                               isNumber: true,
                               suffixText: "%",
-                              // --- [PERUBAHAN] Validator hanya untuk field ini ---
                               validator: (value) {
                                 if (value == null || value.isEmpty) {
                                   return '0-100';
@@ -677,7 +707,7 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
     required String label,
     bool isNumber = false,
     String? suffixText,
-    String? Function(String?)? validator, // --- [PERUBAHAN] Validator optional
+    String? Function(String?)? validator,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -692,8 +722,7 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
           controller: controller,
           style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w300),
           keyboardType: isNumber ? TextInputType.number : TextInputType.text,
-          validator:
-              validator, // --- [PERUBAHAN] Menggunakan validator dari argumen
+          validator: validator,
           decoration: InputDecoration(
             suffixText: suffixText,
             hintText: 'Masukkan $label',

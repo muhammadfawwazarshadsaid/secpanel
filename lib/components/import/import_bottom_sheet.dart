@@ -205,7 +205,7 @@ class _ImportBottomSheetState extends State<ImportBottomSheet> {
             // _buildTemplateDownloaderCard(),
             // const Divider(height: 40, color: AppColors.grayLight),
             const Text(
-              "Impor Data",
+              "Upload Data",
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.w400),
             ),
             const SizedBox(height: 8),

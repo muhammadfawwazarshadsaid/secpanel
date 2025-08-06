@@ -5,7 +5,9 @@ import 'package:secpanel/components/panel/card/remarks_bottom_sheet.dart';
 import 'package:secpanel/models/approles.dart';
 import 'package:secpanel/theme/colors.dart';
 
-// [TAMBAHAN] Class helper untuk menampung data alert yang dinamis
+// [PERUBAHAN] Class helper AlertInfo tidak lagi diperlukan di sini,
+// karena logika baru lebih sederhana dan langsung di-handle di build method.
+// Namun, jika Anda masih menggunakannya di tempat lain, biarkan saja.
 class AlertInfo {
   final String title;
   final String description;
@@ -90,14 +92,13 @@ class PanelProgressCard extends StatelessWidget {
     );
   }
 
-  // [DIGANTI] Fungsi boolean diganti dengan fungsi yang mengembalikan objek AlertInfo
+  // [PERUBAHAN] Fungsi ini disesuaikan untuk hanya menangani H-2 dan Terlambat
   AlertInfo? _getAlertInfo() {
     if (isClosed || targetDelivery == null) {
       return null;
     }
 
     final now = DateTime.now();
-    // Normalisasi tanggal untuk perbandingan hari yang akurat (mengabaikan jam/menit)
     final nowDateOnly = DateTime(now.year, now.month, now.day);
     final targetDateOnly = DateTime(
       targetDelivery!.year,
@@ -105,14 +106,18 @@ class PanelProgressCard extends StatelessWidget {
       targetDelivery!.day,
     );
     final differenceInDays = targetDateOnly.difference(nowDateOnly).inDays;
+    final formattedDate = DateFormat(
+      'd MMM yyyy',
+      'id_ID',
+    ).format(targetDelivery!);
 
     // Kasus Terlambat
     if (differenceInDays < 0) {
       final daysLate = differenceInDays.abs();
       return AlertInfo(
         title: "Terlambat",
-        description: "Terlambat $daysLate hari dari target delivery!",
-        imagePath: 'assets/images/alert-danger.png', // Pastikan gambar ini ada
+        description: "Terlambat $daysLate hari ($formattedDate)",
+        imagePath: 'assets/images/alert-danger.png',
         backgroundColor: const Color.fromARGB(6, 219, 4, 4),
         borderColor: AppColors.red,
         textColor: AppColors.red,
@@ -122,12 +127,11 @@ class PanelProgressCard extends StatelessWidget {
     if (differenceInDays <= 2) {
       String description;
       if (differenceInDays == 0) {
-        description = "Target delivery adalah hari ini!";
+        description = "Target delivery adalah hari ini ($formattedDate)";
       } else if (differenceInDays == 1) {
-        description = "Sisa 1 hari lagi menuju target delivery!";
+        description = "Sisa 1 hari lagi ($formattedDate)";
       } else {
-        description =
-            "Sisa $differenceInDays hari lagi menuju target delivery!";
+        description = "Sisa $differenceInDays hari lagi ($formattedDate)";
       }
       return AlertInfo(
         title: "Perlu Dikejar",
@@ -139,7 +143,6 @@ class PanelProgressCard extends StatelessWidget {
       );
     }
 
-    // Jika tidak ada alert yang perlu ditampilkan
     return null;
   }
 
@@ -205,21 +208,23 @@ class PanelProgressCard extends StatelessWidget {
 
   String _formatTimeAgo(DateTime date) {
     final difference = DateTime.now().difference(date);
+    final formattedDate = DateFormat('d MMM yyyy', 'id_ID').format(closedDate!);
+
     if (difference.inDays > 0) {
-      return '${difference.inDays} hari yang lalu';
+      return '${difference.inDays} hari yang lalu (${formattedDate})';
     } else if (difference.inHours > 0) {
-      return '${difference.inHours} jam yang lalu';
+      return '${difference.inHours} jam yang lalu (${formattedDate})';
     } else if (difference.inMinutes > 0) {
-      return '${difference.inMinutes} menit yang lalu';
+      return '${difference.inMinutes} menit yang lalu (${formattedDate})';
     } else {
-      return 'Baru saja';
+      return 'Baru saja (${formattedDate})';
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final bool hasRemarks = busbarRemarks != null && busbarRemarks!.isNotEmpty;
-    final alertInfo = _getAlertInfo(); // [DIUBAH] Panggil fungsi baru
+    final alertInfo = _getAlertInfo();
 
     final String pccDisplayStatus = statusBusbarPcc;
     final String mccDisplayStatus = statusBusbarMcc;
@@ -751,6 +756,7 @@ class PanelProgressCard extends StatelessWidget {
                   ],
                 ),
               ),
+              // --- [START PERUBAHAN LOGIKA TAMPILAN ALERT] ---
               if (isClosed && closedDate != null)
                 AlertBox(
                   title: "Closed",
@@ -770,17 +776,44 @@ class PanelProgressCard extends StatelessWidget {
                   textColor: alertInfo.textColor,
                 )
               else if (targetDelivery != null)
-                AlertBox(
-                  title: "Target Delivery",
-                  description: DateFormat(
-                    'd MMMM yyyy',
-                    'id_ID',
-                  ).format(targetDelivery!),
-                  imagePath: 'assets/images/alert-progress.png',
-                  backgroundColor: const Color.fromARGB(30, 120, 175, 231),
-                  borderColor: AppColors.blue,
-                  textColor: AppColors.blue,
+                Builder(
+                  builder: (context) {
+                    final now = DateTime.now();
+                    final nowDateOnly = DateTime(now.year, now.month, now.day);
+                    final targetDateOnly = DateTime(
+                      targetDelivery!.year,
+                      targetDelivery!.month,
+                      targetDelivery!.day,
+                    );
+                    final differenceInDays = targetDateOnly
+                        .difference(nowDateOnly)
+                        .inDays;
+                    final formattedDate = DateFormat(
+                      'd MMM yyyy',
+                      'id_ID',
+                    ).format(targetDelivery!);
+
+                    String descriptionText;
+                    // Logika ini sekarang akan menangani semua kasus > 2 hari
+                    if (differenceInDays > 0) {
+                      descriptionText =
+                          "$differenceInDays hari lagi ($formattedDate)";
+                    } else {
+                      // Fallback, seharusnya sudah ditangani oleh _getAlertInfo
+                      descriptionText = "Target: $formattedDate";
+                    }
+
+                    return AlertBox(
+                      title: "Target Delivery",
+                      description: descriptionText,
+                      imagePath: 'assets/images/alert-progress.png',
+                      backgroundColor: const Color.fromARGB(30, 120, 175, 231),
+                      borderColor: AppColors.blue,
+                      textColor: AppColors.blue,
+                    );
+                  },
                 ),
+              // --- [AKHIR PERUBAHAN LOGIKA TAMPILAN ALERT] ---
               Container(
                 padding: const EdgeInsets.all(12),
                 width: double.infinity,

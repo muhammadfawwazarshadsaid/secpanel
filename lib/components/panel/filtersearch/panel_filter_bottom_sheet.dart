@@ -46,6 +46,7 @@ class PanelFilterBottomSheet extends StatefulWidget {
   final List<String> selectedCorepartVendors;
   final DateTimeRange? startDateRange;
   final DateTimeRange? deliveryDateRange;
+  final DateTimeRange? closedDateRange;
 
   final Function(List<String>) onPccStatusesChanged;
   final Function(List<String>) onMccStatusesChanged;
@@ -62,6 +63,7 @@ class PanelFilterBottomSheet extends StatefulWidget {
   final Function(List<String>) onCorepartVendorsChanged;
   final Function(DateTimeRange?) onStartDateRangeChanged;
   final Function(DateTimeRange?) onDeliveryDateRangeChanged;
+  final Function(DateTimeRange?) onClosedDateRangeChanged;
   final VoidCallback onReset;
 
   const PanelFilterBottomSheet({
@@ -99,6 +101,8 @@ class PanelFilterBottomSheet extends StatefulWidget {
     required this.deliveryDateRange,
     required this.onStartDateRangeChanged,
     required this.onDeliveryDateRangeChanged,
+    required this.closedDateRange,
+    required this.onClosedDateRangeChanged,
     required this.onReset,
   });
 
@@ -122,6 +126,7 @@ class _PanelFilterBottomSheetState extends State<PanelFilterBottomSheet> {
   late List<String> _selectedCorepartVendors;
   late DateTimeRange? _startDateRange;
   late DateTimeRange? _deliveryDateRange;
+  late DateTimeRange? _closedDateRange;
 
   final List<String> busbarStatusOptions = [
     "Close",
@@ -150,6 +155,7 @@ class _PanelFilterBottomSheetState extends State<PanelFilterBottomSheet> {
     _selectedCorepartVendors = List.from(widget.selectedCorepartVendors);
     _startDateRange = widget.startDateRange;
     _deliveryDateRange = widget.deliveryDateRange;
+    _closedDateRange = widget.closedDateRange;
   }
 
   Widget _buildOptionButton({
@@ -213,6 +219,7 @@ class _PanelFilterBottomSheetState extends State<PanelFilterBottomSheet> {
     widget.onCorepartVendorsChanged(_selectedCorepartVendors);
     widget.onStartDateRangeChanged(_startDateRange);
     widget.onDeliveryDateRangeChanged(_deliveryDateRange);
+    widget.onClosedDateRangeChanged(_closedDateRange);
     Navigator.pop(context);
   }
 
@@ -469,6 +476,16 @@ class _PanelFilterBottomSheetState extends State<PanelFilterBottomSheet> {
                     onRangeChanged: (range) {
                       setState(() {
                         _deliveryDateRange = range;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 24),
+                  _buildDateRangePicker(
+                    title: "Range Waktu Sampai (Closed Date)",
+                    currentRange: _closedDateRange,
+                    onRangeChanged: (range) {
+                      setState(() {
+                        _closedDateRange = range;
                       });
                     },
                   ),

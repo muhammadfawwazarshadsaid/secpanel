@@ -22,7 +22,7 @@ class ImportProgressDialog extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           const Text(
-            "Mengimpor Data...",
+            "Meng-upload Data...",
             style: TextStyle(fontWeight: FontWeight.w500, fontSize: 16),
           ),
           const SizedBox(height: 20),

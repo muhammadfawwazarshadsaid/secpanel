@@ -128,7 +128,7 @@ class _PreviewBottomSheetState extends State<PreviewBottomSheet> {
           ),
           const SizedBox(height: 24),
           const Text(
-            "Ekspor Data",
+            "Extract Data",
             style: TextStyle(fontSize: 24, fontWeight: FontWeight.w400),
           ),
           Flexible(
@@ -137,7 +137,7 @@ class _PreviewBottomSheetState extends State<PreviewBottomSheet> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // --- [PERUBAHAN] Opsi ekspor yang baru ---
-                  _buildSectionTitle("Pilih Data untuk Diekspor"),
+                  _buildSectionTitle("Pilih Data untuk Di-extract"),
                   Wrap(
                     children: [
                       _buildToggleOption(
@@ -212,7 +212,7 @@ class _PreviewBottomSheetState extends State<PreviewBottomSheet> {
                             'format': _selectedFormat,
                           });
                         },
-                  child: const Text('Ekspor', style: TextStyle(fontSize: 12)),
+                  child: const Text('Extract', style: TextStyle(fontSize: 12)),
                 ),
               ),
             ],

@@ -1,6 +1,5 @@
-import 'dart:convert'; // <-- Tambahkan import ini
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:secpanel/components/import/confirm_import_bottom_sheet.dart';
 import 'package:secpanel/components/import/import_progress_dialog.dart';
 import 'package:secpanel/helpers/db_helper.dart';
@@ -8,6 +7,150 @@ import 'package:secpanel/models/approles.dart';
 import 'package:secpanel/models/company.dart';
 import 'package:secpanel/theme/colors.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+// [PERUBAHAN] Widget baru yang dibuat khusus untuk konfirmasi duplikat, diletakkan di file yang sama.
+class _DuplicateConfirmationBottomSheet extends StatelessWidget {
+  final String title;
+  final String summary;
+  final Map<String, List<int>> duplicateData;
+
+  const _DuplicateConfirmationBottomSheet({
+    required this.title,
+    required this.summary,
+    required this.duplicateData,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final duplicateEntries = duplicateData.entries.toList();
+
+    return Container(
+      height:
+          MediaQuery.of(context).size.height *
+          0.7, // Batasi tinggi bottom sheet
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              height: 5,
+              width: 40,
+              decoration: BoxDecoration(
+                color: AppColors.grayLight,
+                borderRadius: BorderRadius.circular(100),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            title,
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w500),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            summary,
+            style: const TextStyle(
+              color: AppColors.gray,
+              fontSize: 12,
+              fontWeight: FontWeight.w300,
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Bagian yang bisa di-scroll
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: AppColors.grayLight),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: ListView.separated(
+                itemCount: duplicateEntries.length,
+                separatorBuilder: (context, index) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final entry = duplicateEntries[index];
+                  final noPp = entry.key;
+                  final rows = entry.value.join(', ');
+                  return ListTile(
+                    dense: true,
+                    title: Text(
+                      'No. PP: $noPp',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 12,
+                      ),
+                    ),
+                    subtitle: Text(
+                      'Baris: $rows',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.gray,
+                        fontWeight: FontWeight.w300,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    side: const BorderSide(color: AppColors.schneiderGreen),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                  child: const Text(
+                    "Batal",
+                    style: TextStyle(
+                      color: AppColors.schneiderGreen,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    backgroundColor: AppColors.schneiderGreen,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                  child: const Text(
+                    "Lanjutkan",
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ValidationResult {
+  final List<String> missing;
+  final List<String> unrecognized;
+  _ValidationResult({required this.missing, required this.unrecognized});
+}
 
 class ImportReviewScreen extends StatefulWidget {
   final Map<String, List<Map<String, dynamic>>> initialData;
@@ -27,23 +170,29 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
   late Map<String, List<Map<String, dynamic>>> _editableData;
   late Map<String, Set<int>> _duplicateRows;
   late Map<String, Map<int, Set<String>>> _brokenRelationCells;
+  late Map<String, Set<int>> _invalidIdentifierRows;
   bool _isLoading = true;
 
   late Map<String, Set<String>> _existingPrimaryKeys;
   List<Company> _allCompanies = [];
 
-  static const Map<String, List<String>> _templateColumns = {
-    'panel': [
-      'PP Panel',
-      'Panel No',
-      'WBS',
-      'PROJECT',
-      'Plan Start',
-      'Actual Delivery ke SEC',
-      'Panel',
-      'Busbar',
-    ],
-    'user': ['Username', 'Password', 'Company', 'Company Role'],
+  static const Map<String, Map<String, String>> _columnEquivalents = {
+    'panel': {
+      'PP Panel': 'no_pp',
+      'Panel No': 'no_panel',
+      'WBS': 'no_wbs',
+      'PROJECT': 'project',
+      'Plan Start': 'start_date',
+      'Actual Delivery ke SEC': 'target_delivery',
+      'Panel': 'vendor_id',
+      'Busbar': 'busbar_vendor_id',
+    },
+    'user': {
+      'Username': 'username',
+      'Password': 'password',
+      'Company': 'company_name',
+      'Company Role': 'role',
+    },
   };
 
   final ValueNotifier<double> _progressNotifier = ValueNotifier(0.0);
@@ -60,6 +209,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     });
     _duplicateRows = {};
     _brokenRelationCells = {};
+    _invalidIdentifierRows = {};
     _initializeAndValidateData();
   }
 
@@ -100,22 +250,68 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     };
   }
 
-  void _validateDuplicates() {
-    _duplicateRows = {};
-    const Map<String, String> primaryKeyMapping = {
+  String? _findPrimaryKeyColumnName(
+    String tableName,
+    List<String> actualColumns,
+  ) {
+    const dbPkMap = {
       'companies': 'id',
       'company_accounts': 'username',
       'panels': 'no_pp',
+      'user': 'username',
+      'panel': 'no_pp',
     };
-    for (var entry in primaryKeyMapping.entries) {
-      final tableName = entry.key;
-      final pkColumn = entry.value;
-      if (_editableData.containsKey(tableName) &&
-          _editableData[tableName]!.isNotEmpty &&
-          (_editableData[tableName]!.first.containsKey(pkColumn))) {
+
+    final dbPkName = dbPkMap[tableName.toLowerCase()];
+    if (dbPkName == null) return null;
+
+    final equivalents = _columnEquivalents[tableName.toLowerCase()];
+    String? templatePkName;
+    if (equivalents != null) {
+      for (var entry in equivalents.entries) {
+        if (entry.value.toLowerCase() == dbPkName.toLowerCase()) {
+          templatePkName = entry.key;
+          break;
+        }
+      }
+    }
+
+    final actualColsLower = actualColumns.map((c) => c.toLowerCase()).toSet();
+
+    if (templatePkName != null &&
+        actualColsLower.contains(templatePkName.toLowerCase())) {
+      return actualColumns.firstWhere(
+        (c) => c.toLowerCase() == templatePkName!.toLowerCase(),
+      );
+    }
+
+    if (actualColsLower.contains(dbPkName.toLowerCase())) {
+      return actualColumns.firstWhere(
+        (c) => c.toLowerCase() == dbPkName.toLowerCase(),
+      );
+    }
+
+    return null;
+  }
+
+  void _validateDuplicates() {
+    _duplicateRows = {};
+
+    for (final tableName in _editableData.keys) {
+      final rows = _editableData[tableName]!;
+      if (rows.isEmpty) continue;
+
+      final actualColumns = rows.first.keys.toList();
+      final pkColumn = _findPrimaryKeyColumnName(tableName, actualColumns);
+
+      if (pkColumn != null) {
         _duplicateRows.putIfAbsent(tableName, () => <int>{});
-        final rows = _editableData[tableName]!;
-        final pksInDb = _existingPrimaryKeys[tableName] ?? {};
+        final dbTableName = (tableName.toLowerCase() == 'panel')
+            ? 'panels'
+            : (tableName.toLowerCase() == 'user')
+            ? 'company_accounts'
+            : tableName;
+        final pksInDb = _existingPrimaryKeys[dbTableName] ?? {};
         final pksInFile = <String>{};
         for (int i = 0; i < rows.length; i++) {
           final pkValue = rows[i][pkColumn]?.toString();
@@ -127,6 +323,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
         }
       }
     }
+
     final List<String> compositeKeyTables = [
       'busbars',
       'components',
@@ -173,18 +370,15 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     _editableData.forEach((tableName, rows) {
       if (rows.isEmpty) return;
       _brokenRelationCells.putIfAbsent(tableName, () => {});
-
       for (int i = 0; i < rows.length; i++) {
         final row = rows[i];
         _brokenRelationCells[tableName]!.putIfAbsent(i, () => {});
-
         final relationsToCheck = <String, Set<String>>{
           'company_id': allAvailableCompanyIDs,
           'vendor_id': allAvailableCompanyIDs,
           'created_by': allAvailableCompanyIDs,
           'vendor': allAvailableCompanyIDs,
         };
-
         relationsToCheck.forEach((colName, validKeys) {
           if (row.containsKey(colName)) {
             final fk = row[colName]?.toString() ?? '';
@@ -197,10 +391,49 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     });
   }
 
+  void _validateMissingIdentifiers() {
+    _invalidIdentifierRows = {};
+    const String tableName = 'panel';
+    if (!_editableData.containsKey(tableName) ||
+        _editableData[tableName]!.isEmpty) {
+      return;
+    }
+
+    _invalidIdentifierRows.putIfAbsent(tableName, () => <int>{});
+    final rows = _editableData[tableName]!;
+
+    for (int i = 0; i < rows.length; i++) {
+      final row = rows[i];
+      String? getVal(List<String> keys) {
+        for (final key in keys) {
+          final actualKey = row.keys.firstWhere(
+            (k) => k.toLowerCase() == key.toLowerCase(),
+            orElse: () => '',
+          );
+          if (actualKey.isNotEmpty) {
+            return row[actualKey]?.toString();
+          }
+        }
+        return null;
+      }
+
+      final noPp = getVal(['no_pp', 'pp panel']);
+      final noPanel = getVal(['no_panel', 'panel no']);
+      final noWbs = getVal(['no_wbs', 'wbs']);
+
+      if ((noPp == null || noPp.isEmpty) &&
+          (noPanel == null || noPanel.isEmpty) &&
+          (noWbs == null || noWbs.isEmpty)) {
+        _invalidIdentifierRows[tableName]!.add(i);
+      }
+    }
+  }
+
   void _revalidateOnDataChange() {
     setState(() {
       _validateDuplicates();
       _validateBrokenRelations();
+      _validateMissingIdentifiers();
     });
   }
 
@@ -208,7 +441,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     setState(() {
       final columns = _editableData[tableName]!.isNotEmpty
           ? _editableData[tableName]!.first.keys.toList()
-          : (_templateColumns[tableName.toLowerCase()] ?? []);
+          : (_columnEquivalents[tableName.toLowerCase()]?.keys.toList() ?? []);
       final newRow = {for (var col in columns) col: ''};
       _editableData[tableName]!.add(newRow);
       _revalidateOnDataChange();
@@ -254,27 +487,121 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     }
   }
 
-  Future<void> _saveToDatabase() async {
-    if (!widget.isCustomTemplate) {
-      final hasDuplicates = _duplicateRows.values.any((s) => s.isNotEmpty);
-      if (hasDuplicates) {
-        _showErrorSnackBar(
-          'Data duplikat tidak bisa disimpan. Harap perbaiki.',
-        );
-        return;
-      }
-      final hasBrokenRelations = _brokenRelationCells.values.any(
-        (map) => map.values.any((set) => set.isNotEmpty),
-      );
-      if (hasBrokenRelations) {
-        _showErrorSnackBar(
-          'Masih ada relasi data yang belum valid (ditandai merah). Harap perbaiki.',
-        );
-        return;
+  List<Map<String, dynamic>> _resolvePanelDuplicates(
+    List<Map<String, dynamic>> originalPanels,
+  ) {
+    if (originalPanels.isEmpty) return [];
+
+    final pkColumn =
+        _findPrimaryKeyColumnName(
+          'panel',
+          originalPanels.first.keys.toList(),
+        ) ??
+        'no_pp';
+    final Map<String, List<Map<String, dynamic>>> groupedByNoPp = {};
+    final List<Map<String, dynamic>> nonPanelKeyRows = [];
+
+    for (final row in originalPanels) {
+      final noPp = row[pkColumn]?.toString();
+      if (noPp != null && noPp.isNotEmpty) {
+        groupedByNoPp.putIfAbsent(noPp, () => []).add(row);
+      } else {
+        nonPanelKeyRows.add(row);
       }
     }
 
-    final confirm = await showModalBottomSheet<bool>(
+    final List<Map<String, dynamic>> resolvedPanels = [];
+    for (final group in groupedByNoPp.values) {
+      if (group.length <= 1) {
+        resolvedPanels.addAll(group);
+      } else {
+        Map<String, dynamic>? bestRow;
+        int maxScore = -1;
+
+        for (final row in group) {
+          int currentScore = row.values
+              .where((v) => v != null && v.toString().trim().isNotEmpty)
+              .length;
+          if (currentScore > maxScore) {
+            maxScore = currentScore;
+            bestRow = row;
+          }
+        }
+        if (bestRow != null) {
+          resolvedPanels.add(bestRow);
+        }
+      }
+    }
+
+    resolvedPanels.addAll(nonPanelKeyRows);
+
+    return resolvedPanels;
+  }
+
+  Future<void> _saveToDatabase() async {
+    final hasInvalidIdentifiers = _invalidIdentifierRows.values.any(
+      (s) => s.isNotEmpty,
+    );
+    if (hasInvalidIdentifiers) {
+      _showErrorSnackBar(
+        'Beberapa baris panel tidak memiliki identifier (No PP/Panel/WBS). Harap perbaiki.',
+      );
+      return;
+    }
+
+    final hasBrokenRelations = _brokenRelationCells.values.any(
+      (map) => map.values.any((set) => set.isNotEmpty),
+    );
+    if (hasBrokenRelations && !widget.isCustomTemplate) {
+      _showErrorSnackBar(
+        'Masih ada relasi data yang belum valid (ditandai merah). Harap perbaiki.',
+      );
+      return;
+    }
+
+    // [PERUBAHAN] Alur konfirmasi duplikat menggunakan widget baru
+    final panelDuplicates = _duplicateRows['panel'];
+    if (panelDuplicates != null &&
+        panelDuplicates.isNotEmpty &&
+        _editableData['panel']!.isNotEmpty) {
+      final panelRows = _editableData['panel']!;
+      final pkColumn =
+          _findPrimaryKeyColumnName('panel', panelRows.first.keys.toList()) ??
+          'no_pp';
+
+      final Map<String, List<int>> duplicatePpToRows = {};
+      for (final index in panelDuplicates) {
+        final noPp = panelRows[index][pkColumn]?.toString();
+        if (noPp != null && noPp.isNotEmpty) {
+          duplicatePpToRows.putIfAbsent(noPp, () => []).add(index + 1);
+        }
+      }
+
+      if (duplicatePpToRows.isNotEmpty) {
+        final totalDuplicateRows = panelDuplicates.length;
+        final uniqueDuplicatePpCount = duplicatePpToRows.length;
+
+        final summary =
+            'Terdapat $totalDuplicateRows data panel dengan $uniqueDuplicatePpCount No. PP yang sama. Sistem akan memilih data paling lengkap untuk setiap No. PP berikut:';
+
+        final confirm = await showModalBottomSheet<bool>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (ctx) => _DuplicateConfirmationBottomSheet(
+            title: 'Konfirmasi Data Duplikat',
+            summary: summary,
+            duplicateData: duplicatePpToRows,
+          ),
+        );
+
+        if (confirm != true) {
+          return;
+        }
+      }
+    }
+
+    final confirmGeneral = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.white,
@@ -287,13 +614,18 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
             'Data akan ditambahkan atau diperbarui di database. Lanjutkan?',
       ),
     );
-    if (confirm != true) return;
+    if (confirmGeneral != true) return;
 
-    // --- [LOG 1] TAMPILKAN DATA MENTAH SEBELUM DIPROSES ---
-    debugPrint('--- DEBUG LOG: DATA TO BE IMPORTED ---');
-    debugPrint(const JsonEncoder.withIndent('  ').convert(_editableData));
-    debugPrint('-----------------------------------------');
-    // ----------------------------------------------------
+    final dataToImport = _editableData.map((key, value) {
+      return MapEntry(
+        key,
+        value.map((item) => Map<String, dynamic>.from(item)).toList(),
+      );
+    });
+
+    if (dataToImport.containsKey('panel')) {
+      dataToImport['panel'] = _resolvePanelDuplicates(dataToImport['panel']!);
+    }
 
     final prefs = await SharedPreferences.getInstance();
     final String? loggedInUsername = prefs.getString('loggedInUsername');
@@ -311,7 +643,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
       String resultMessage;
       if (widget.isCustomTemplate) {
         resultMessage = await DatabaseHelper.instance.importFromCustomTemplate(
-          data: _editableData,
+          data: dataToImport,
           onProgress: (p, m) {
             _progressNotifier.value = p;
             _statusNotifier.value = m;
@@ -319,22 +651,16 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
           loggedInUsername: loggedInUsername,
         );
       } else {
-        await DatabaseHelper.instance.importData(_editableData, (p, m) {
+        await DatabaseHelper.instance.importData(dataToImport, (p, m) {
           _progressNotifier.value = p;
           _statusNotifier.value = m;
         });
         resultMessage = "Data berhasil diimpor! 🎉";
       }
 
-      // --- [LOG 2] TAMPILKAN PESAN HASIL DARI DATABASE HELPER ---
-      debugPrint('--- DEBUG LOG: RESULT MESSAGE RECEIVED ---');
-      debugPrint(resultMessage);
-      debugPrint('---------------------------------------------');
-      // --------------------------------------------------------
-
       if (mounted) {
-        Navigator.of(context).pop(); // pop progress dialog
-        Navigator.of(context).pop(true); // pop review screen
+        Navigator.of(context).pop();
+        Navigator.of(context).pop(true);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(resultMessage),
@@ -478,15 +804,17 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
 
   Widget _buildTabWithIndicator(String tableName) {
     final hasDuplicates = (_duplicateRows[tableName]?.isNotEmpty ?? false);
-    final hasWarnings =
+    final hasBrokenRelations =
         (_brokenRelationCells[tableName]?.values.any((s) => s.isNotEmpty) ??
         false);
+    final hasInvalidIdentifiers =
+        (_invalidIdentifierRows[tableName]?.isNotEmpty ?? false);
     final rowCount = _editableData[tableName]?.length ?? 0;
 
     Color? indicatorColor;
     if (hasDuplicates) {
       indicatorColor = AppColors.red;
-    } else if (hasWarnings) {
+    } else if (hasBrokenRelations || hasInvalidIdentifiers) {
       indicatorColor = Colors.orange;
     }
 
@@ -543,19 +871,43 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     );
   }
 
-  String _normalizeColumnName(String name) {
-    return name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+  _ValidationResult _validateColumnStructure(
+    String tableName,
+    List<String> actualColumns,
+  ) {
+    final equivalents = _columnEquivalents[tableName.toLowerCase()];
+    if (equivalents == null) {
+      return _ValidationResult(missing: [], unrecognized: []);
+    }
+    final validTemplateNames = equivalents.keys
+        .map((k) => k.toLowerCase())
+        .toSet();
+    final validDbNames = equivalents.values.map((v) => v.toLowerCase()).toSet();
+    final actualColsLower = actualColumns.map((k) => k.toLowerCase()).toSet();
+    final unrecognized = actualColumns.where((actualCol) {
+      final lower = actualCol.toLowerCase();
+      return !validTemplateNames.contains(lower) &&
+          !validDbNames.contains(lower);
+    }).toList();
+    final missing = equivalents.entries
+        .where((entry) {
+          final templateNameLower = entry.key.toLowerCase();
+          final dbNameLower = entry.value.toLowerCase();
+          return !actualColsLower.contains(templateNameLower) &&
+              !actualColsLower.contains(dbNameLower);
+        })
+        .map((entry) => entry.key)
+        .toList();
+    return _ValidationResult(missing: missing, unrecognized: unrecognized);
   }
 
   Widget _buildColumnValidationInfoBox(String tableName) {
     if (!_editableData.containsKey(tableName)) return const SizedBox.shrink();
-
     final detailsStyle = TextStyle(
       fontSize: 12,
       color: Colors.black.withOpacity(0.8),
       fontWeight: FontWeight.w300,
     );
-
     if (_editableData[tableName]!.isEmpty) {
       return Container(
         margin: const EdgeInsets.only(bottom: 16),
@@ -570,32 +922,11 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
         ),
       );
     }
-
-    final expectedColumnList = _templateColumns[tableName.toLowerCase()] ?? [];
-    if (expectedColumnList.isEmpty) return const SizedBox.shrink();
-
     final actualColumns = _editableData[tableName]!.first.keys.toList();
+    final validationResult = _validateColumnStructure(tableName, actualColumns);
+    final unrecognizedColumns = validationResult.unrecognized;
 
-    final normalizedExpected = expectedColumnList
-        .map(_normalizeColumnName)
-        .toSet();
-    final normalizedActual = actualColumns.map(_normalizeColumnName).toSet();
-
-    final missingNormalized = normalizedExpected.difference(normalizedActual);
-    final unrecognizedNormalized = normalizedActual.difference(
-      normalizedExpected,
-    );
-
-    final missingColumns = expectedColumnList
-        .where((col) => missingNormalized.contains(_normalizeColumnName(col)))
-        .toList();
-    final unrecognizedColumns = actualColumns
-        .where(
-          (col) => unrecognizedNormalized.contains(_normalizeColumnName(col)),
-        )
-        .toList();
-
-    if (missingColumns.isEmpty && unrecognizedColumns.isEmpty) {
+    if (unrecognizedColumns.isEmpty) {
       return Container(
         margin: const EdgeInsets.only(bottom: 16),
         child: _buildInfoAlert(
@@ -603,7 +934,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
           color: AppColors.schneiderGreen,
           title: "Struktur Kolom Sesuai",
           details: Text(
-            "Semua kolom yang diperlukan sudah ada dan dikenali.",
+            "Semua kolom yang ada di file dikenali oleh sistem.",
             style: detailsStyle,
           ),
         ),
@@ -619,24 +950,9 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
         details: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (missingColumns.isNotEmpty) ...[
-              const Text(
-                "Kolom yang hilang:",
-                style: TextStyle(fontWeight: FontWeight.w500),
-              ),
-              Text(
-                "  • ${missingColumns.join('\n  • ')}",
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-              ),
-              const Text(
-                "Gunakan tombol (+) di header untuk menambahkan.",
-                style: TextStyle(fontSize: 11, color: Colors.black54),
-              ),
-              const SizedBox(height: 8),
-            ],
             if (unrecognizedColumns.isNotEmpty) ...[
               const Text(
-                "Kolom tidak dikenali:",
+                "Kolom di file yang tidak dikenali:",
                 style: TextStyle(fontWeight: FontWeight.w500),
               ),
               Text(
@@ -644,7 +960,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
                 style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
               ),
               const Text(
-                "Ganti nama atau hapus kolom ini menggunakan menu (⋮) di header.",
+                "Ganti nama kolom ini agar sesuai template/DB, atau hapus jika tidak diperlukan.",
                 style: TextStyle(fontSize: 11, color: Colors.black54),
               ),
             ],
@@ -657,7 +973,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
   Widget _buildDataTable(String tableName, List<Map<String, dynamic>> rows) {
     final columns = rows.isNotEmpty
         ? rows.first.keys.toList()
-        : (_templateColumns[tableName.toLowerCase()] ?? []);
+        : (_columnEquivalents[tableName.toLowerCase()]?.keys.toList() ?? []);
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
       child: Column(
@@ -713,16 +1029,20 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
                     rows: List.generate(rows.length, (index) {
                       final rowData = rows[index];
                       final isDuplicate =
-                          (_duplicateRows[tableName]?.contains(index) ?? false);
+                          _duplicateRows[tableName]?.contains(index) ?? false;
                       final brokenCells =
                           _brokenRelationCells[tableName]?[index] ?? <String>{};
+                      final isInvalidIdentifier =
+                          _invalidIdentifierRows[tableName]?.contains(index) ??
+                          false;
 
                       return DataRow(
                         key: ObjectKey(rowData),
                         color: MaterialStateProperty.resolveWith<Color?>((s) {
-                          if (isDuplicate) {
+                          if (isDuplicate)
                             return AppColors.red.withOpacity(0.1);
-                          }
+                          if (isInvalidIdentifier)
+                            return AppColors.orange.withOpacity(0.15);
                           return null;
                         }),
                         cells: [
@@ -800,7 +1120,6 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
       fontFamily: 'Lexend',
       color: isBroken ? AppColors.red : AppColors.black,
     );
-
     return SizedBox(
       width: 180,
       child: TextFormField(
@@ -918,6 +1237,8 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     final rowData = _editableData[tableName]![index];
     final isDuplicate = (_duplicateRows[tableName]?.contains(index) ?? false);
     final brokenCells = (_brokenRelationCells[tableName]?[index] ?? <String>{});
+    final isInvalidIdentifier =
+        (_invalidIdentifierRows[tableName]?.contains(index) ?? false);
     final pkColumn = _getPkColumn(tableName);
     final pkValue = (pkColumn.isNotEmpty && rowData.containsKey(pkColumn))
         ? rowData[pkColumn]
@@ -956,11 +1277,23 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
               ),
               const SizedBox(height: 16),
               if (widget.isCustomTemplate ||
-                  (brokenCells.isEmpty && !isDuplicate))
+                  (brokenCells.isEmpty && !isDuplicate && !isInvalidIdentifier))
                 const Text(
                   'Tidak ada masalah terdeteksi pada baris ini.',
                   style: TextStyle(color: AppColors.gray),
                 ),
+              if (isInvalidIdentifier) ...[
+                _buildInfoAlert(
+                  icon: Icons.error_outline,
+                  color: AppColors.orange,
+                  title: "Warning: Identifier Wajib Kosong",
+                  details: const Text(
+                    'Harap isi salah satu dari kolom "No PP", "No Panel", atau "No WBS".',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
               if (brokenCells.isNotEmpty)
                 _buildInfoAlert(
                   icon: Icons.error_outline,
@@ -978,7 +1311,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
                   color: AppColors.red,
                   title: "Error: Data Duplikat",
                   details: Text(
-                    'Nilai "$pkValue" untuk kolom "$pkColumn" sudah ada dan tidak bisa ditambahkan lagi.',
+                    'Nilai "$pkValue" sudah ada nilai sebelumnya (lihat PP Panel/Username).',
                     style: const TextStyle(fontSize: 12),
                   ),
                 ),
@@ -1065,7 +1398,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
             _buildActionButtons(
               context: context,
               onSave: () {
-                final newName = controller.text.trim().replaceAll(' ', '_');
+                final newName = controller.text.trim();
                 _renameColumn(tableName, oldName, newName);
                 Navigator.pop(context);
               },
@@ -1117,7 +1450,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
               autofocus: true,
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w300),
               decoration: InputDecoration(
-                hintText: 'Masukkan Nama Kolom (tanpa spasi)',
+                hintText: 'Masukkan Nama Kolom',
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 16,
                   vertical: 12,
@@ -1141,7 +1474,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
               context: context,
               saveLabel: "Tambah",
               onSave: () {
-                final newName = controller.text.trim().replaceAll(' ', '_');
+                final newName = controller.text.trim();
                 _addNewColumn(tableName, newName);
                 Navigator.pop(context);
               },

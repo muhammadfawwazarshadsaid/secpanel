@@ -1,10 +1,9 @@
 import 'dart:io';
-
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart'; // <-- Pastikan import ini ada
-import 'package:secpanel/helpers/db_helper.dart';
-import 'package:secpanel/models/company.dart';
-import 'package:secpanel/theme/colors.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:secpanel/helpers/db_helper.dart'; // Sesuaikan jika path helper Anda berbeda
+import 'package:secpanel/models/company.dart'; // Sesuaikan jika path model Anda berbeda
+import 'package:secpanel/theme/colors.dart'; // Sesuaikan jika path theme Anda berbeda
 import 'package:shared_preferences/shared_preferences.dart';
 
 class LoginPage extends StatefulWidget {
@@ -19,32 +18,102 @@ class _LoginPageState extends State<LoginPage> {
   final _passwordController = TextEditingController();
 
   bool _isLoading = false;
+  bool _isCheckingPermissions =
+      true; // State baru untuk menandai pengecekan izin
   bool _isPasswordVisible = false;
 
   @override
   void initState() {
     super.initState();
-    // Memanggil fungsi permintaan izin saat halaman pertama kali dibuka
-    _requestStoragePermissionOnStartup();
+    // Ganti fungsi lama dengan alur startup yang baru
+    _handleStartupChecks();
   }
 
-  /// Fungsi untuk meminta izin MANAGE_EXTERNAL_STORAGE.
-  /// Ini akan membuka halaman Pengaturan Sistem pada Android 11+.
-  Future<void> _requestStoragePermissionOnStartup() async {
-    // This "if" statement stops the code from running on macOS/Windows/Linux
-    if (Platform.isAndroid || Platform.isIOS) {
-      var status = await Permission.storage.status;
+  // --- [LOGIKA BARU DITAMBAHKAN DI SINI] ---
+
+  /// Fungsi utama yang menangani semua pengecekan saat halaman login dimuat.
+  Future<void> _handleStartupChecks() async {
+    // [PERBAIKAN] Cek apakah kita TIDAK di web, DAN apakah kita di Android/iOS.
+    // Ini memastikan kode izin hanya berjalan di platform mobile.
+    if ((Platform.isAndroid || Platform.isIOS)) {
+      print("Platform mobile terdeteksi, menjalankan pengecekan izin...");
+      // 1. Minta Izin Notifikasi
+      await _requestNotificationPermission();
+      // 2. Minta pengecekan optimisasi baterai (khusus Android)
+      await _requestBatteryOptimizationExemption();
+    } else {
+      print("Bukan platform mobile (Web/Desktop), melewati pengecekan izin.");
+    }
+
+    // Setelah semua selesai, aktifkan tombol-tombol di UI
+    if (mounted) {
+      setState(() {
+        _isCheckingPermissions = false;
+      });
+    }
+  }
+
+  /// Fungsi untuk meminta izin notifikasi.
+  Future<void> _requestNotificationPermission() async {
+    PermissionStatus status = await Permission.notification.request();
+    if (status.isPermanentlyDenied) {
+      await _showSettingsDialog(
+        title: 'Izin Notifikasi Dibutuhkan',
+        content:
+            'Aplikasi ini butuh izin notifikasi untuk update penting. Silakan aktifkan di pengaturan aplikasi.',
+      );
+    }
+  }
+
+  /// Fungsi untuk meminta pengecualian optimisasi baterai.
+  Future<void> _requestBatteryOptimizationExemption() async {
+    if (Platform.isAndroid) {
+      PermissionStatus status =
+          await Permission.ignoreBatteryOptimizations.status;
       if (status.isDenied) {
-        await Permission.storage.request();
+        await Permission.ignoreBatteryOptimizations.request();
       }
     }
   }
+
+  /// Dialog untuk mengarahkan pengguna ke pengaturan jika izin ditolak permanen.
+  Future<void> _showSettingsDialog({
+    required String title,
+    required String content,
+  }) async {
+    if (mounted) {
+      await showDialog(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: Text(title),
+            content: Text(content),
+            actions: <Widget>[
+              TextButton(
+                child: const Text('Batal'),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+              TextButton(
+                child: const Text('Buka Pengaturan'),
+                onPressed: () {
+                  openAppSettings();
+                  Navigator.of(context).pop();
+                },
+              ),
+            ],
+          );
+        },
+      );
+    }
+  }
+
+  // --- [AKHIR DARI LOGIKA BARU] ---
 
   void _showSuccessSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: Colors.green, // Or AppColors.schneiderGreen
+        backgroundColor: Colors.green,
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -58,7 +127,8 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _login() async {
-    if (_isLoading) return;
+    // Tombol tidak akan bisa ditekan jika izin sedang dicek atau sedang login
+    if (_isLoading || _isCheckingPermissions) return;
 
     setState(() {
       _isLoading = true;
@@ -118,6 +188,9 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Kondisi untuk menonaktifkan tombol
+    final bool areButtonsDisabled = _isLoading || _isCheckingPermissions;
+
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
@@ -146,6 +219,24 @@ class _LoginPageState extends State<LoginPage> {
                           color: AppColors.black,
                         ),
                       ),
+                      // [UI BARU] Tampilkan status jika sedang cek izin
+                      if (_isCheckingPermissions) ...[
+                        const SizedBox(height: 16),
+                        const Row(
+                          children: [
+                            SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              'Memeriksa izin aplikasi...',
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 40),
@@ -273,7 +364,8 @@ class _LoginPageState extends State<LoginPage> {
                               borderRadius: BorderRadius.circular(6),
                             ),
                           ),
-                          onPressed: _isLoading
+                          // [DIUBAH] Tombol dinonaktifkan saat cek izin
+                          onPressed: areButtonsDisabled
                               ? null
                               : () {
                                   Navigator.pushNamed(
@@ -307,7 +399,8 @@ class _LoginPageState extends State<LoginPage> {
                               borderRadius: BorderRadius.circular(6),
                             ),
                           ),
-                          onPressed: _isLoading ? null : _login,
+                          // [DIUBAH] Tombol dinonaktifkan saat cek izin
+                          onPressed: areButtonsDisabled ? null : _login,
                           child: _isLoading
                               ? const SizedBox(
                                   height: 24,

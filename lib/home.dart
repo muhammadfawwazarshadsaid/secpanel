@@ -51,9 +51,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   List<String> selectedComponents = [];
   List<String> selectedPalet = [];
   List<String> selectedCorepart = [];
-  // --- [BARU] State untuk rentang tanggal ---
   DateTimeRange? startDateRange;
   DateTimeRange? deliveryDateRange;
+  DateTimeRange? closedDateRange;
 
   @override
   void initState() {
@@ -67,23 +67,41 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     setState(() {
       _isLoading = true;
     });
-    await Future.delayed(const Duration(milliseconds: 500));
 
-    final panelsDataFromDb = await DatabaseHelper.instance
-        .getAllPanelsForDisplay(widget.currentCompany);
+    try {
+      final panelsDataFromDb = await DatabaseHelper.instance
+          .getAllPanelsForDisplay(
+            currentUser: widget.currentCompany,
+            startDateRange: startDateRange,
+            deliveryDateRange: deliveryDateRange,
+            closedDateRange: closedDateRange,
+          );
 
-    final k3Vendors = await DatabaseHelper.instance.getK3Vendors();
-    final k5Vendors = await DatabaseHelper.instance.getK5Vendors();
-    final whsVendors = await DatabaseHelper.instance.getWHSVendors();
+      final k3Vendors = await DatabaseHelper.instance.getK3Vendors();
+      final k5Vendors = await DatabaseHelper.instance.getK5Vendors();
+      final whsVendors = await DatabaseHelper.instance.getWHSVendors();
 
-    if (mounted) {
-      setState(() {
-        _allPanelsData = panelsDataFromDb;
-        _allK3Vendors = k3Vendors;
-        _allK5Vendors = k5Vendors;
-        _allWHSVendors = whsVendors;
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _allPanelsData = panelsDataFromDb;
+          _allK3Vendors = k3Vendors;
+          _allK5Vendors = k5Vendors;
+          _allWHSVendors = whsVendors;
+        });
+      }
+    } catch (e) {
+      print("Gagal memuat data awal: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("Error: ${e.toString()}")));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -138,7 +156,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return _allPanelsData.where((data) {
       final panel = data.panel;
 
-      // ... (Filter lain tetap sama)
       final query = searchQuery.toLowerCase();
       final matchSearch =
           (panel.noPanel ?? '').toLowerCase().contains(query) ||
@@ -150,24 +167,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           data.componentVendorNames.toLowerCase().contains(query) ||
           data.paletVendorNames.toLowerCase().contains(query) ||
           data.corepartVendorNames.toLowerCase().contains(query);
-
-      // --- [BARU] Logika filter rentang tanggal ---
-      final matchStartDate =
-          startDateRange == null ||
-          (panel.startDate != null &&
-              !panel.startDate!.isBefore(startDateRange!.start) &&
-              !panel.startDate!.isAfter(
-                startDateRange!.end.add(const Duration(days: 1)),
-              ));
-
-      final matchDeliveryDate =
-          deliveryDateRange == null ||
-          (panel.targetDelivery != null &&
-              !panel.targetDelivery!.isBefore(deliveryDateRange!.start) &&
-              !panel.targetDelivery!.isAfter(
-                deliveryDateRange!.end.add(const Duration(days: 1)),
-              ));
-      // --- [AKHIR LOGIKA BARU] ---
 
       final matchPanelVendor =
           selectedPanelVendors.isEmpty ||
@@ -207,8 +206,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
       final baseFiltersMatch =
           matchSearch &&
-          matchStartDate && // Tambahkan pengecekan
-          matchDeliveryDate && // Tambahkan pengecekan
           matchPanelVendor &&
           matchBusbarVendor &&
           matchComponentVendor &&
@@ -236,13 +233,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   List<PanelDisplayData> get filteredPanelsForDisplay {
     var tabFilteredPanels = _panelsAfterPrimaryFilters;
-    // ... (sisa logika sorting dan tab tidak berubah)
     final role = widget.currentCompany.role;
 
     switch (_tabController.index) {
-      case 0:
+      case 0: // All
         break;
-      case 1:
+      case 1: // Open Vendor
         if (role == AppRole.k5) {
           tabFilteredPanels = tabFilteredPanels
               .where((data) => data.busbarVendorIds.isEmpty)
@@ -263,38 +259,35 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               .toList();
         }
         break;
-      case 2:
-        if (role == AppRole.k5) {
-          tabFilteredPanels = tabFilteredPanels
-              .where(
-                (data) =>
-                    data.busbarVendorIds.contains(widget.currentCompany.id) &&
-                    (data.panel.percentProgress ?? 0) < 100 &&
-                    !data.panel.isClosed,
-              )
-              .toList();
-        } else if (role == AppRole.warehouse) {
-          tabFilteredPanels = tabFilteredPanels
-              .where(
-                (data) =>
-                    data.componentVendorIds.contains(
-                      widget.currentCompany.id,
-                    ) &&
-                    (data.panel.percentProgress ?? 0) < 100 &&
-                    !data.panel.isClosed,
-              )
-              .toList();
-        } else {
-          tabFilteredPanels = tabFilteredPanels
-              .where(
-                (data) =>
-                    (data.panel.percentProgress ?? 0) < 100 &&
-                    !data.panel.isClosed,
-              )
-              .toList();
-        }
+      // --- [START] PERUBAHAN LOGIKA UNTUK "NEED TO TRACK" ---
+      case 2: // Need to Track
+        tabFilteredPanels = tabFilteredPanels.where((data) {
+          final panel = data.panel;
+          bool isReadyToDelivery =
+              (panel.percentProgress ?? 0) >= 100 && !panel.isClosed;
+          bool isClosed = panel.isClosed;
+          bool isOpenVendor;
+
+          // Tentukan kondisi Open Vendor berdasarkan role
+          if (role == AppRole.k5) {
+            isOpenVendor = data.busbarVendorIds.isEmpty;
+          } else if (role == AppRole.warehouse) {
+            isOpenVendor = data.componentVendorIds.isEmpty;
+          } else {
+            // Admin, K3, Viewer
+            isOpenVendor =
+                data.busbarVendorIds.isEmpty ||
+                data.componentVendorIds.isEmpty ||
+                data.paletVendorIds.isEmpty ||
+                data.corepartVendorIds.isEmpty;
+          }
+
+          // Panel "Need to Track" jika TIDAK termasuk kategori lain
+          return !isOpenVendor && !isReadyToDelivery && !isClosed;
+        }).toList();
         break;
-      case 3:
+      // --- [END] PERUBAHAN LOGIKA UNTUK "NEED TO TRACK" ---
+      case 3: // Ready to Delivery
         tabFilteredPanels = tabFilteredPanels
             .where(
               (data) =>
@@ -303,7 +296,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             )
             .toList();
         break;
-      case 4:
+      case 4: // Closed Panel
         tabFilteredPanels = tabFilteredPanels
             .where((data) => data.panel.isClosed)
             .toList();
@@ -385,13 +378,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         selectedComponentVendors: selectedComponentVendors,
         selectedPaletVendors: selectedPaletVendors,
         selectedCorepartVendors: selectedCorepartVendors,
-        // --- [BARU] Kirim state & callback tanggal ke bottom sheet ---
         startDateRange: startDateRange,
         deliveryDateRange: deliveryDateRange,
-        onStartDateRangeChanged: (value) =>
-            setState(() => startDateRange = value),
-        onDeliveryDateRangeChanged: (value) =>
-            setState(() => deliveryDateRange = value),
+        closedDateRange: closedDateRange,
+        onStartDateRangeChanged: (value) => setState(() {
+          startDateRange = value;
+          _loadInitialData();
+        }),
+        onDeliveryDateRangeChanged: (value) => setState(() {
+          deliveryDateRange = value;
+          _loadInitialData();
+        }),
+        onClosedDateRangeChanged: (value) => setState(() {
+          closedDateRange = value;
+          _loadInitialData();
+        }),
         onPccStatusesChanged: (value) =>
             setState(() => selectedPccStatuses = value),
         onMccStatusesChanged: (value) =>
@@ -432,17 +433,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             selectedComponents = [];
             selectedPalet = [];
             selectedCorepart = [];
-            // --- [BARU] Reset filter tanggal ---
             startDateRange = null;
             deliveryDateRange = null;
+            closedDateRange = null;
           });
-          Navigator.pop(context);
+          _loadInitialData();
         },
       ),
     );
   }
 
-  // ... (Sisa kode di home_screen.dart tetap sama)
   void _openEditPanelBottomSheet(PanelDisplayData dataToEdit) {
     showModalBottomSheet(
       context: context,
@@ -540,33 +540,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           .length;
     }
 
-    final int onGoingPanelCount;
-    if (role == AppRole.k5) {
-      onGoingPanelCount = baseFilteredList
-          .where(
-            (data) =>
-                data.busbarVendorIds.contains(widget.currentCompany.id) &&
-                (data.panel.percentProgress ?? 0) < 100 &&
-                !data.panel.isClosed,
-          )
-          .length;
-    } else if (role == AppRole.warehouse) {
-      onGoingPanelCount = baseFilteredList
-          .where(
-            (data) =>
-                data.componentVendorIds.contains(widget.currentCompany.id) &&
-                (data.panel.percentProgress ?? 0) < 100 &&
-                !data.panel.isClosed,
-          )
-          .length;
-    } else {
-      onGoingPanelCount = baseFilteredList
-          .where(
-            (data) =>
-                (data.panel.percentProgress ?? 0) < 100 && !data.panel.isClosed,
-          )
-          .length;
-    }
+    // --- [START] PERUBAHAN LOGIKA PENGHITUNGAN "NEED TO TRACK" ---
+    final onGoingPanelCount = baseFilteredList.where((data) {
+      final panel = data.panel;
+      bool isReadyToDelivery =
+          (panel.percentProgress ?? 0) >= 100 && !panel.isClosed;
+      bool isClosed = panel.isClosed;
+      bool isOpenVendor;
+
+      if (role == AppRole.k5) {
+        isOpenVendor = data.busbarVendorIds.isEmpty;
+      } else if (role == AppRole.warehouse) {
+        isOpenVendor = data.componentVendorIds.isEmpty;
+      } else {
+        // Admin, K3, Viewer
+        isOpenVendor =
+            data.busbarVendorIds.isEmpty ||
+            data.componentVendorIds.isEmpty ||
+            data.paletVendorIds.isEmpty ||
+            data.corepartVendorIds.isEmpty;
+      }
+
+      return !isOpenVendor && !isReadyToDelivery && !isClosed;
+    }).length;
+    // --- [END] PERUBAHAN LOGIKA PENGHITUNGAN "NEED TO TRACK" ---
 
     final readyToDeliveryCount = baseFilteredList
         .where(

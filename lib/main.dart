@@ -1,39 +1,46 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:secpanel/login.dart';
+import 'package:secpanel/login.dart'; // Asumsi halaman login Anda ada di sini
 import 'package:secpanel/login_change_password.dart';
-import 'package:secpanel/main_screen.dart';
+import 'package:secpanel/main_screen.dart'; // Halaman utama setelah login
+import 'package:secpanel/theme/colors.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-Future<void> main() async {
-  await dotenv.load(fileName: ".env");
-  runApp(const MyApp());
+void main() async {
+  // [TAMBAHKAN] Blok ini untuk inisialisasi
+  WidgetsFlutterBinding.ensureInitialized();
+  await initializeDateFormatting('id_ID', null);
+
+  final prefs = await SharedPreferences.getInstance();
+  final companyId = prefs.getString('companyId');
+
+  runApp(MyApp(isLoggedIn: companyId != null));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final bool isLoggedIn;
+
+  const MyApp({super.key, required this.isLoggedIn});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      theme: ThemeData(
-        useMaterial3: true,
-        fontFamily: 'Lexend',
-        textTheme: const TextTheme(
-          bodyMedium: TextStyle(fontWeight: FontWeight.w400, fontSize: 14),
-          bodyLarge: TextStyle(fontWeight: FontWeight.w500, fontSize: 16),
-          titleLarge: TextStyle(fontWeight: FontWeight.w700, fontSize: 20),
-        ),
-      ),
-      title: 'Schneider Indonesia',
-
+      title: 'SEC Panel',
       debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        primaryColor: AppColors.schneiderGreen,
+        scaffoldBackgroundColor: AppColors.white,
+        fontFamily: 'Lexend',
+        colorScheme: ColorScheme.fromSeed(seedColor: AppColors.schneiderGreen),
+        useMaterial3: true,
+      ),
 
-      home: const LoginPage(),
-
+      // initialRoute: isLoggedIn ? '/home' : '/login',
+      initialRoute: '/login',
       routes: {
         '/login': (context) => const LoginPage(),
-        '/home': (context) => const MainScreen(),
         '/login-change-password': (context) => const LoginChangePasswordPage(),
+        '/home': (context) => const MainScreen(),
       },
     );
   }

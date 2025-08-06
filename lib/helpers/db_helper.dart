@@ -1689,11 +1689,12 @@
 //     }
 //   }
 // }
+// filename: lib/helpers/db_helper.dart
 import 'dart:convert';
 import 'dart:io';
 import 'package:excel/excel.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:secpanel/models/approles.dart';
@@ -1718,16 +1719,12 @@ class DatabaseHelper {
 
   String get _baseUrl {
     if (kReleaseMode) {
-      // Jika aplikasi versi RILIS (production)
-      return dotenv.env['BASE_URL_PROD']!;
+      return "https://secpanel-db.onrender.com";
     } else {
-      // Jika aplikasi versi DEBUG (development)
       if (Platform.isAndroid) {
-        // Jika jalan di Android (emulator atau fisik)
-        return dotenv.env['BASE_URL_DEV_EMULATOR']!;
+        return "https://secpanel-db.onrender.com";
       } else {
-        // Jika jalan di iOS, Web, atau Desktop
-        return dotenv.env['BASE_URL_DEV_LOCAL']!;
+        return "https://secpanel-db.onrender.com";
       }
     }
   }
@@ -1761,7 +1758,13 @@ class DatabaseHelper {
           );
           break;
         case 'DELETE':
-          response = await http.delete(uri, headers: _headers);
+          // [PERBAIKAN] Mengirim body pada request DELETE jika 'body' tidak null.
+          // Ini akan memperbaiki error "Invalid payload: EOF".
+          response = await http.delete(
+            uri,
+            headers: _headers,
+            body: body != null ? jsonEncode(body) : null,
+          );
           break;
         default:
           throw Exception('Metode HTTP tidak didukung: $method');
@@ -1772,42 +1775,86 @@ class DatabaseHelper {
       } else if (response.statusCode == 404) {
         return null;
       } else {
-        final errorBody = jsonDecode(utf8.decode(response.bodyBytes));
-        final errorMessage = errorBody['error'] ?? 'Unknown Server Error';
-        throw Exception('Gagal: $errorMessage (Code: ${response.statusCode})');
+        // Coba decode error dari server. Jika gagal, gunakan pesan default.
+        try {
+          final errorBody = jsonDecode(utf8.decode(response.bodyBytes));
+          final errorMessage = errorBody['error'] ?? 'Unknown Server Error';
+          throw Exception(
+            'Gagal: $errorMessage (Code: ${response.statusCode})',
+          );
+        } catch (_) {
+          // Jika body error bukan JSON, tampilkan body mentah.
+          throw Exception(
+            'Gagal: ${utf8.decode(response.bodyBytes)} (Code: ${response.statusCode})',
+          );
+        }
       }
+    } on SocketException catch (e) {
+      print('SocketException: ${e.toString()}');
+      throw Exception(
+        'Tidak dapat terhubung ke server. Periksa koneksi internet Anda. (Detail: ${e.message})',
+      );
     } catch (e) {
       print('Terjadi error pada API request ke $endpoint: $e');
       rethrow;
     }
   }
 
-  // Fungsi-fungsi berikut tidak lagi diperlukan karena tidak ada DB lokal.
-  // Disediakan sebagai placeholder agar tidak error jika ada pemanggilan.
+  // Placeholder functions, not used with API backend
   static dynamic? _database;
   Future<dynamic> get database async => _database ??= await _initDatabase();
   Future<dynamic> _initDatabase() async => Future.value(null);
-  Future<void> _onCreate(dynamic db, int version) async {}
-  Future<void> _createDummyData(dynamic batch) async {}
 
   // =========================================================================
-  // FUNGSI-FUNGSI YANG DIMODIFIKASI UNTUK MEMANGGIL API
+  // FUNGSI-FUNGSI API
   // =========================================================================
 
-  Future<List<PanelDisplayData>> getAllPanelsForDisplay(
-    Company currentUser,
-  ) async {
-    final endpoint =
-        '/panels?role=${currentUser.role.name}&company_id=${currentUser.id}';
-    final dynamic responseData = await _apiRequest('GET', endpoint);
-
-    // TAMBAHKAN INI: Cek jika data null atau bukan List, kembalikan list kosong
-    if (responseData == null || responseData is! List) {
-      return [];
+  Future<List<PanelDisplayData>> getAllPanelsForDisplay({
+    Company? currentUser,
+    DateTimeRange? startDateRange,
+    DateTimeRange? deliveryDateRange,
+    DateTimeRange? closedDateRange,
+  }) async {
+    Map<String, String> queryParams = {};
+    if (currentUser != null) {
+      queryParams = {
+        'role': currentUser.role.name,
+        'company_id': currentUser.id,
+      };
     }
 
-    // Jika aman, lanjutkan proses
-    final List<dynamic> data = responseData;
+    if (startDateRange != null) {
+      queryParams['start_date_start'] = startDateRange.start
+          .toUtc()
+          .toIso8601String();
+      queryParams['start_date_end'] = startDateRange.end
+          .toUtc()
+          .toIso8601String();
+    }
+    if (deliveryDateRange != null) {
+      queryParams['delivery_date_start'] = deliveryDateRange.start
+          .toUtc()
+          .toIso8601String();
+      queryParams['delivery_date_end'] = deliveryDateRange.end
+          .toUtc()
+          .toIso8601String();
+    }
+    if (closedDateRange != null) {
+      queryParams['closed_date_start'] = closedDateRange.start
+          .toUtc()
+          .toIso8601String();
+      queryParams['closed_date_end'] = closedDateRange.end
+          .toUtc()
+          .toIso8601String();
+    }
+
+    final uri = Uri.parse(
+      '$_baseUrl/panels',
+    ).replace(queryParameters: queryParams);
+    final endpoint = uri.toString().substring(_baseUrl.length);
+
+    final List<dynamic>? data = await _apiRequest('GET', endpoint);
+    if (data == null) return [];
     return data.map((json) => PanelDisplayData.fromJson(json)).toList();
   }
 
@@ -1849,10 +1896,6 @@ class DatabaseHelper {
     Company company, {
     String? newPassword,
   }) async {
-    // Note: Logika kompleks untuk update ini sekarang ada di backend.
-    // Frontend hanya perlu mengirim data baru.
-    // Backend akan menangani pencarian companyId, dll.
-    // Asumsi: company.id disini adalah username yang akan diupdate
     final username = company.id;
     await _apiRequest(
       'PUT',
@@ -1863,7 +1906,7 @@ class DatabaseHelper {
 
   Future<int> deleteCompanyAccount(String username) async {
     await _apiRequest('DELETE', '/account/$username');
-    return 1; // Return 1 untuk menandakan berhasil (seperti sqflite)
+    return 1;
   }
 
   Future<Company?> getCompanyById(String id) async {
@@ -1923,23 +1966,35 @@ class DatabaseHelper {
 
   Future<bool> isNoPpTaken(String noPp) async {
     final data = await _apiRequest('GET', '/panel/exists/no-pp/$noPp');
-    return data != null; // Jika ada data (bukan null), berarti 'taken'
+    return data != null;
   }
 
   Future<int> insertPanel(Panel panel) async {
-    // Backend akan handle insert atau replace (upsert)
     await _apiRequest('POST', '/panels', body: panel.toMapForApi());
     return 1;
   }
 
   Future<int> updatePanel(Panel panel) async {
-    // Menggunakan endpoint yang sama dengan insert, karena backend handle upsert
     await _apiRequest('POST', '/panels', body: panel.toMapForApi());
     return 1;
   }
 
   Future<void> deletePanel(String noPp) async {
     await _apiRequest('DELETE', '/panels/$noPp');
+  }
+
+  Future<void> deletePanels(List<String> noPps) async {
+    // Fungsi ini sekarang akan bekerja dengan benar karena _apiRequest sudah diperbaiki
+    try {
+      await _apiRequest(
+        'DELETE',
+        '/panels/bulk-delete',
+        body: {'no_pps': noPps},
+      );
+    } catch (e) {
+      print('Error deleting multiple panels: $e');
+      rethrow; // Lempar kembali error spesifik dari _apiRequest
+    }
   }
 
   Future<List<Panel>> getAllPanels() async {
@@ -2013,36 +2068,46 @@ class DatabaseHelper {
   ) async {
     final endpoint =
         '/export/filtered-data?role=${currentUser.role.name}&company_id=${currentUser.id}';
-    final Map<String, dynamic> data = await _apiRequest('GET', endpoint);
+    final dynamic responseData = await _apiRequest('GET', endpoint);
 
-    // Data dari API perlu di-deserialize kembali ke objek Dart
+    if (responseData == null || responseData is! Map<String, dynamic>) {
+      return {
+        'companies': [],
+        'companyAccounts': [],
+        'panels': [],
+        'busbars': [],
+        'components': [],
+        'palet': [],
+        'corepart': [],
+      };
+    }
+
+    final Map<String, dynamic> data = responseData;
+
     return {
-      'companies': (data['companies'] as List)
+      'companies': ((data['companies'] as List<dynamic>?) ?? [])
           .map((c) => Company.fromMap(c as Map<String, dynamic>))
           .toList(),
-      'companyAccounts': (data['companyAccounts'] as List)
+      'companyAccounts': ((data['companyAccounts'] as List<dynamic>?) ?? [])
           .map((c) => CompanyAccount.fromMap(c as Map<String, dynamic>))
           .toList(),
-      'panels': (data['panels'] as List)
+      'panels': ((data['panels'] as List<dynamic>?) ?? [])
           .map((p) => Panel.fromMap(p as Map<String, dynamic>))
           .toList(),
-      'busbars': (data['busbars'] as List)
+      'busbars': ((data['busbars'] as List<dynamic>?) ?? [])
           .map((b) => Busbar.fromMap(b as Map<String, dynamic>))
           .toList(),
-      'components': (data['components'] as List)
+      'components': ((data['components'] as List<dynamic>?) ?? [])
           .map((c) => Component.fromMap(c as Map<String, dynamic>))
           .toList(),
-      'palet': (data['palet'] as List)
+      'palet': ((data['palet'] as List<dynamic>?) ?? [])
           .map((p) => Palet.fromMap(p as Map<String, dynamic>))
           .toList(),
-      'corepart': (data['corepart'] as List)
+      'corepart': ((data['corepart'] as List<dynamic>?) ?? [])
           .map((c) => Corepart.fromMap(c as Map<String, dynamic>))
           .toList(),
     };
   }
-
-  // --- Fungsi Export tetap di Flutter karena melibatkan pembuatan file Excel ---
-  // --- yang lebih mudah ditangani di client-side. ---
 
   Future<Excel> generateCustomExportExcel({
     required bool includePanelData,
@@ -2156,7 +2221,6 @@ class DatabaseHelper {
     Map<String, bool> tablesToInclude,
     Company currentUser,
   ) async {
-    // Logika pembuatan Excel tetap di Flutter
     final excel = Excel.createExcel();
     excel.delete('Sheet1');
     final data = await getFilteredDataForExport(currentUser);
@@ -2185,7 +2249,6 @@ class DatabaseHelper {
         ]);
       }
     }
-    // ... (ulangi untuk semua tabel lain: Company Accounts, Panels, Busbars, etc.) ...
     return excel;
   }
 
@@ -2223,15 +2286,6 @@ class DatabaseHelper {
     return TemplateFile(bytes: bytes, extension: extension);
   }
 
-  // Fungsi-fungsi helper di bawah ini tidak lagi diperlukan di Flutter
-  // karena logikanya sudah pindah ke backend Go.
-  // Dibiarkan ada agar tidak menyebabkan error jika ada pemanggilan.
-  String _generateJsonTemplateString(String dataType) => "{}";
-  Excel _generateExcelTemplate(String dataType) => Excel.createExcel();
-  String? _parseDate(String? dateStr) => dateStr;
-  String? _getValueCaseInsensitive(Map<String, dynamic> row, String key) =>
-      row[key]?.toString();
-
   Future<bool> isPanelNumberUnique(
     String noPanel, {
     String? currentNoPp,
@@ -2241,7 +2295,7 @@ class DatabaseHelper {
       endpoint += '?current_no_pp=$currentNoPp';
     }
     final data = await _apiRequest('GET', endpoint);
-    return data == null; // Jika null (404), berarti unik
+    return data == null;
   }
 
   Future<bool> isUsernameTaken(String username) async {

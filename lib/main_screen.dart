@@ -1,4 +1,6 @@
+// filename: lib/main_screen.dart
 import 'package:flutter/material.dart';
+import 'package:secpanel/components/bulkdelete/bulk_delete_screen.dart';
 import 'package:secpanel/components/export/export_bottom_sheet.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:secpanel/components/panel/add/add_panel_bottom_sheet.dart';
@@ -14,7 +16,6 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:secpanel/theme/colors.dart';
 
@@ -43,18 +44,14 @@ class _MainScreenState extends State<MainScreen> {
     final companyId = prefs.getString('companyId');
 
     if (companyId == null) {
-      if (mounted) {
-        Navigator.of(context).pushReplacementNamed('/login');
-      }
+      if (mounted) Navigator.of(context).pushReplacementNamed('/login');
       return;
     }
 
     final company = await DatabaseHelper.instance.getCompanyById(companyId);
 
     if (company == null) {
-      if (mounted) {
-        Navigator.of(context).pushReplacementNamed('/login');
-      }
+      if (mounted) Navigator.of(context).pushReplacementNamed('/login');
       return;
     }
 
@@ -94,7 +91,6 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  // --- [PERUBAHAN] Fungsi ini dirombak total untuk menangani format ekspor baru ---
   Future<void> _processExport(Map<String, dynamic> exportData) async {
     final bool exportPanel = exportData['exportPanel'] as bool? ?? false;
     final bool exportUser = exportData['exportUser'] as bool? ?? false;
@@ -104,7 +100,7 @@ class _MainScreenState extends State<MainScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Tidak ada data yang dipilih untuk diekspor.'),
+            content: Text('Tidak ada data yang dipilih untuk di-extract.'),
             backgroundColor: Colors.orange,
           ),
         );
@@ -124,7 +120,7 @@ class _MainScreenState extends State<MainScreen> {
               children: [
                 CircularProgressIndicator(color: AppColors.schneiderGreen),
                 SizedBox(width: 20),
-                Text("Mengekspor data..."),
+                Text("Meng-extract data..."),
               ],
             ),
           ),
@@ -186,20 +182,18 @@ class _MainScreenState extends State<MainScreen> {
           successMessage = "File berhasil disimpan: $fileName";
 
           if (Platform.isIOS || Platform.isMacOS) {
-            await Share.shareXFiles([XFile(path)], text: 'File Ekspor Data');
+            await Share.shareXFiles([XFile(path)], text: 'File Extract Data');
           }
         } else {
           throw Exception("Gagal membuat data file.");
         }
       } else {
-        errorMessage = "Ekspor dibatalkan: Tidak ada folder yang dipilih.";
+        errorMessage = "Extract dibatalkan: Tidak ada folder yang dipilih.";
       }
     } catch (e) {
-      errorMessage = "Ekspor gagal: $e";
+      errorMessage = "Extract gagal: $e";
     } finally {
-      if (mounted) {
-        Navigator.of(context).pop();
-      }
+      if (mounted) Navigator.of(context).pop();
     }
 
     if (mounted) {
@@ -219,7 +213,6 @@ class _MainScreenState extends State<MainScreen> {
       }
     }
   }
-  // --- [AKHIR PERUBAHAN] ---
 
   void _refreshHomeScreen() {
     setState(() {
@@ -270,13 +263,45 @@ class _MainScreenState extends State<MainScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text('Data berhasil diperbarui!'),
-                backgroundColor: Colors.green,
+                backgroundColor: AppColors.schneiderGreen,
               ),
             );
           },
         );
       },
     );
+  }
+
+  void _showBulkDeleteBottomSheet() {
+    showModalBottomSheet<BulkDeleteResult>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) => const BulkDeleteBottomSheet(),
+    ).then((result) {
+      // [PERBAIKAN] Menangani object BulkDeleteResult, bukan lagi boolean.
+      if (result != null && mounted) {
+        // Tampilkan pesan sukses atau error dari hasil operasi
+        if (result.message.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(result.message),
+              backgroundColor: result.success
+                  ? AppColors.schneiderGreen
+                  : Colors.red,
+            ),
+          );
+        }
+
+        // Refresh halaman jika ada perubahan data
+        if (result.dataHasChanged) {
+          _refreshHomeScreen();
+        }
+      }
+    });
   }
 
   @override
@@ -296,6 +321,7 @@ class _MainScreenState extends State<MainScreen> {
         _currentCompany?.role == AppRole.admin ||
         _currentCompany?.role == AppRole.k3;
     final bool canExportData = true;
+    final bool canBulkDelete = _currentCompany?.role == AppRole.admin;
 
     return Scaffold(
       backgroundColor: AppColors.white,
@@ -306,7 +332,7 @@ class _MainScreenState extends State<MainScreen> {
             bottom: 20,
             right: 16,
             child: PopupMenuButton<String>(
-              offset: const Offset(0, -100),
+              offset: const Offset(0, -140),
               color: AppColors.white,
               elevation: 2,
               shape: RoundedRectangleBorder(
@@ -330,7 +356,7 @@ class _MainScreenState extends State<MainScreen> {
                           ),
                           const SizedBox(width: 12),
                           const Text(
-                            'Import',
+                            'Upload',
                             style: TextStyle(
                               color: AppColors.black,
                               fontSize: 12,
@@ -357,7 +383,33 @@ class _MainScreenState extends State<MainScreen> {
                           ),
                           const SizedBox(width: 12),
                           const Text(
-                            'Export',
+                            'Extract',
+                            style: TextStyle(
+                              color: AppColors.black,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w400,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+                if (canBulkDelete) {
+                  items.add(
+                    PopupMenuItem<String>(
+                      value: 'bulk_delete',
+                      height: 36,
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.delete_sweep_outlined,
+                            color: AppColors.red,
+                            size: 24,
+                          ),
+                          const SizedBox(width: 12),
+                          const Text(
+                            'Bulk Delete',
                             style: TextStyle(
                               color: AppColors.black,
                               fontSize: 12,
@@ -378,6 +430,9 @@ class _MainScreenState extends State<MainScreen> {
                     break;
                   case 'export':
                     _showExportBottomSheet();
+                    break;
+                  case 'bulk_delete':
+                    _showBulkDeleteBottomSheet();
                     break;
                 }
               },
