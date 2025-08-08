@@ -1690,6 +1690,7 @@
 //   }
 // }
 // filename: lib/helpers/db_helper.dart
+// filename: lib/helpers/db_helper.dart
 import 'dart:convert';
 import 'dart:io';
 import 'package:excel/excel.dart';
@@ -1758,8 +1759,8 @@ class DatabaseHelper {
           );
           break;
         case 'DELETE':
-          // [PERBAIKAN] Mengirim body pada request DELETE jika 'body' tidak null.
-          // Ini akan memperbaiki error "Invalid payload: EOF".
+          // [PERBAIKAN UTAMA] Memastikan body dikirim pada request DELETE jika ada.
+          // Ini adalah perbaikan untuk error "Invalid payload: EOF" dari server.
           response = await http.delete(
             uri,
             headers: _headers,
@@ -1775,18 +1776,26 @@ class DatabaseHelper {
       } else if (response.statusCode == 404) {
         return null;
       } else {
-        // Coba decode error dari server. Jika gagal, gunakan pesan default.
-        try {
-          final errorBody = jsonDecode(utf8.decode(response.bodyBytes));
-          final errorMessage = errorBody['error'] ?? 'Unknown Server Error';
-          throw Exception(
-            'Gagal: $errorMessage (Code: ${response.statusCode})',
-          );
-        } catch (_) {
-          // Jika body error bukan JSON, tampilkan body mentah.
-          throw Exception(
-            'Gagal: ${utf8.decode(response.bodyBytes)} (Code: ${response.statusCode})',
-          );
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          // Handle respons sukses
+          if (response.body.isEmpty) return null;
+          return jsonDecode(utf8.decode(response.bodyBytes));
+        } else {
+          String errorMessage;
+          try {
+            final errorBody = jsonDecode(utf8.decode(response.bodyBytes));
+            errorMessage =
+                errorBody['error'] ??
+                'Terjadi kesalahan tidak dikenal dari server.';
+          } catch (e) {
+            errorMessage = utf8.decode(response.bodyBytes);
+            if (errorMessage.isEmpty) {
+              errorMessage =
+                  'Terjadi kesalahan tanpa pesan (Code: ${response.statusCode})';
+            }
+          }
+
+          throw Exception(errorMessage);
         }
       }
     } on SocketException catch (e) {
@@ -1879,6 +1888,10 @@ class DatabaseHelper {
       body: {'password': newPassword},
     );
     return true;
+  }
+
+  Future<void> insertCompany(Company company) async {
+    await _apiRequest('POST', '/company', body: company.toMap());
   }
 
   Future<void> insertCompanyWithAccount(
@@ -1984,7 +1997,6 @@ class DatabaseHelper {
   }
 
   Future<void> deletePanels(List<String> noPps) async {
-    // Fungsi ini sekarang akan bekerja dengan benar karena _apiRequest sudah diperbaiki
     try {
       await _apiRequest(
         'DELETE',
@@ -1993,7 +2005,10 @@ class DatabaseHelper {
       );
     } catch (e) {
       print('Error deleting multiple panels: $e');
-      rethrow; // Lempar kembali error spesifik dari _apiRequest
+      // [PERBAIKAN KEDUA] Gunakan 'rethrow' untuk meneruskan error asli dari server.
+      // Ini akan memberikan pesan error yang lebih spesifik di UI,
+      // bukan "Gagal menghapus panel secara massal".
+      rethrow;
     }
   }
 

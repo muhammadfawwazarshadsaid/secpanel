@@ -8,7 +8,6 @@ import 'package:secpanel/models/company.dart';
 import 'package:secpanel/theme/colors.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// [PERUBAHAN] Widget baru yang dibuat khusus untuk konfirmasi duplikat, diletakkan di file yang sama.
 class _DuplicateConfirmationBottomSheet extends StatelessWidget {
   final String title;
   final String summary;
@@ -61,7 +60,6 @@ class _DuplicateConfirmationBottomSheet extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          // Bagian yang bisa di-scroll
           Expanded(
             child: Container(
               decoration: BoxDecoration(
@@ -175,6 +173,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
 
   late Map<String, Set<String>> _existingPrimaryKeys;
   List<Company> _allCompanies = [];
+  Map<String, String> _companyIdToName = {};
 
   static const Map<String, Map<String, String>> _columnEquivalents = {
     'panel': {
@@ -218,6 +217,9 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
 
     await _fetchAllCompanies();
     await _fetchExistingPrimaryKeys();
+
+    await _resolveVendorNamesToIds();
+
     _revalidateOnDataChange();
 
     if (mounted) setState(() => _isLoading = false);
@@ -225,6 +227,8 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
 
   Future<void> _fetchAllCompanies() async {
     _allCompanies = await DatabaseHelper.instance.getAllCompanies();
+    _companyIdToName = {for (var c in _allCompanies) c.id: c.name};
+    if (mounted) setState(() {});
   }
 
   Future<void> _fetchExistingPrimaryKeys() async {
@@ -234,7 +238,9 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
       'company_accounts': (await dbHelper.getAllCompanyAccounts())
           .map((a) => a.username)
           .toSet(),
-      'panels': (await dbHelper.getAllPanels()).map((p) => p.noPp).toSet(),
+      'panels': (await dbHelper.getAllPanels())
+          .map((p) => p.noPp.trim().toLowerCase())
+          .toSet(),
       'busbars': (await dbHelper.getAllBusbars())
           .map((b) => "${b.panelNoPp}_${b.vendor}")
           .toSet(),
@@ -297,33 +303,71 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
   void _validateDuplicates() {
     _duplicateRows = {};
 
+    // --- LOGIKA BARU UNTUK SEMUA JENIS TABEL ---
     for (final tableName in _editableData.keys) {
       final rows = _editableData[tableName]!;
       if (rows.isEmpty) continue;
 
-      final actualColumns = rows.first.keys.toList();
-      final pkColumn = _findPrimaryKeyColumnName(tableName, actualColumns);
+      _duplicateRows.putIfAbsent(tableName, () => <int>{});
 
-      if (pkColumn != null) {
-        _duplicateRows.putIfAbsent(tableName, () => <int>{});
-        final dbTableName = (tableName.toLowerCase() == 'panel')
-            ? 'panels'
-            : (tableName.toLowerCase() == 'user')
-            ? 'company_accounts'
-            : tableName;
-        final pksInDb = _existingPrimaryKeys[dbTableName] ?? {};
-        final pksInFile = <String>{};
-        for (int i = 0; i < rows.length; i++) {
-          final pkValue = rows[i][pkColumn]?.toString();
-          if (pkValue != null && pkValue.isNotEmpty) {
-            if (pksInDb.contains(pkValue) || !pksInFile.add(pkValue)) {
-              _duplicateRows[tableName]!.add(i);
-            }
+      // Sesuaikan nama tabel DB untuk lookup di _existingPrimaryKeys
+      final dbTableName = (tableName.toLowerCase() == 'panel')
+          ? 'panels'
+          : (tableName.toLowerCase() == 'user')
+          ? 'company_accounts'
+          : tableName.toLowerCase();
+
+      final pksInDb = _existingPrimaryKeys[dbTableName] ?? {};
+      final pksInFileToRows = <String, List<int>>{};
+      final bool isComposite = [
+        'busbars',
+        'components',
+        'palet',
+        'corepart',
+      ].contains(dbTableName);
+
+      final actualColumns = rows.first.keys.toList();
+      final pkColumn = isComposite
+          ? null
+          : _findPrimaryKeyColumnName(tableName, actualColumns);
+
+      // --- TAHAP 1: Kumpulkan, Kelompokkan, dan Cek ke DB ---
+      for (int i = 0; i < rows.length; i++) {
+        String? pkValueNormalized;
+
+        if (isComposite) {
+          final row = rows[i];
+          final panelNoPp = row['panel_no_pp']?.toString() ?? '';
+          final vendor = row['vendor']?.toString() ?? '';
+          if (panelNoPp.isNotEmpty && vendor.isNotEmpty) {
+            pkValueNormalized = "${panelNoPp}_${vendor}";
           }
+        } else if (pkColumn != null) {
+          final pkValueRaw = rows[i][pkColumn]?.toString() ?? '';
+          pkValueNormalized = pkValueRaw.trim().toLowerCase();
+        }
+
+        if (pkValueNormalized != null && pkValueNormalized.isNotEmpty) {
+          // Langsung tandai jika sudah ada di database
+          if (pksInDb.contains(pkValueNormalized)) {
+            _duplicateRows[tableName]!.add(i);
+          }
+          // Kelompokkan semua baris berdasarkan kuncinya untuk cek duplikasi internal file
+          pksInFileToRows.putIfAbsent(pkValueNormalized, () => []).add(i);
+        }
+      }
+
+      // --- TAHAP 2: Tandai semua baris dalam grup yang duplikat ---
+      for (final entry in pksInFileToRows.entries) {
+        // Jika sebuah kunci primer muncul di lebih dari satu baris
+        if (entry.value.length > 1) {
+          // Tandai semua baris tersebut sebagai duplikat
+          _duplicateRows[tableName]!.addAll(entry.value);
         }
       }
     }
 
+    // --- LOOPING KEDUA (KHUSUS UNTUK COMPOSITE KEYS) ---
     final List<String> compositeKeyTables = [
       'busbars',
       'components',
@@ -334,11 +378,13 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
       if (!_editableData.containsKey(tableName) ||
           _editableData[tableName]!.isEmpty)
         continue;
+
       _duplicateRows.putIfAbsent(tableName, () => <int>{});
       final rows = _editableData[tableName]!;
       final existingCompositeKeys =
           _existingPrimaryKeys[tableName] ?? <String>{};
       final seenKeysInFile = <String>{};
+
       for (int i = 0; i < rows.length; i++) {
         final row = rows[i];
         final panelNoPp = row['panel_no_pp']?.toString() ?? '';
@@ -354,39 +400,66 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     }
   }
 
+  /// [PERBAIKAN TOTAL] Logika validasi relasi diperbaiki agar lebih ketat dan akurat.
   void _validateBrokenRelations() {
     _brokenRelationCells = {};
-    final allCompanyIDsInFile =
-        _editableData['companies']
-            ?.map((row) => row['id']?.toString() ?? '')
-            .where((id) => id.isNotEmpty)
-            .toSet() ??
-        {};
-    final allAvailableCompanyIDs = {
-      ..._existingPrimaryKeys['companies'] ?? {},
-      ...allCompanyIDsInFile,
+
+    // Kunci yang valid HANYA yang dari database.
+    final validCompanyIDs = Set<String>.from(
+      _existingPrimaryKeys['companies'] ?? {},
+    );
+
+    // Daftar nama kolom DB yang merupakan foreign key ke tabel companies
+    const companyForeignKeyDbNames = {
+      'vendor_id',
+      'busbar_vendor_id',
+      'vendor',
+      'company_id',
     };
 
     _editableData.forEach((tableName, rows) {
       if (rows.isEmpty) return;
       _brokenRelationCells.putIfAbsent(tableName, () => {});
+
       for (int i = 0; i < rows.length; i++) {
         final row = rows[i];
         _brokenRelationCells[tableName]!.putIfAbsent(i, () => {});
-        final relationsToCheck = <String, Set<String>>{
-          'company_id': allAvailableCompanyIDs,
-          'vendor_id': allAvailableCompanyIDs,
-          'created_by': allAvailableCompanyIDs,
-          'vendor': allAvailableCompanyIDs,
-        };
-        relationsToCheck.forEach((colName, validKeys) {
-          if (row.containsKey(colName)) {
-            final fk = row[colName]?.toString() ?? '';
-            if (fk.isNotEmpty && !validKeys.contains(fk)) {
-              _brokenRelationCells[tableName]![i]!.add(colName);
+
+        for (final actualColName in row.keys) {
+          // Cari nama kolom versi database-nya
+
+          final equivalents = _columnEquivalents[tableName.toLowerCase()];
+          String dbColName = actualColName; // Default value
+
+          if (equivalents != null) {
+            for (var entry in equivalents.entries) {
+              // Bandingkan setelah keduanya diubah ke huruf kecil
+              if (entry.key.toLowerCase() == actualColName.toLowerCase()) {
+                dbColName = entry.value; // Jika cocok, gunakan nama kolom DB
+                break; // Hentikan pencarian
+              }
             }
           }
-        });
+          if (companyForeignKeyDbNames.contains(dbColName)) {
+            final fkValue = row[actualColName]?.toString() ?? '';
+
+            if (fkValue.isNotEmpty && !validCompanyIDs.contains(fkValue)) {
+              _brokenRelationCells[tableName]![i]!.add(actualColName);
+            }
+          }
+          // Periksa apakah ini kolom yang perlu divalidasi relasinya ke tabel company
+          if (companyForeignKeyDbNames.contains(dbColName)) {
+            final fkValue = row[actualColName]?.toString() ?? '';
+
+            // Tandai error HANYA JIKA kolom terisi tapi isinya tidak ada di daftar ID valid
+            // Setelah _resolveVendorNamesToIds berjalan, sel yang valid berisi ID,
+            // yang tidak valid tetap berisi nama asli dari file.
+            // Pengecekan ini akan secara otomatis menandai merah sel yang berisi nama tak dikenal.
+            if (fkValue.isNotEmpty && !validCompanyIDs.contains(fkValue)) {
+              _brokenRelationCells[tableName]![i]!.add(actualColName);
+            }
+          }
+        }
       }
     });
   }
@@ -539,6 +612,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
   }
 
   Future<void> _saveToDatabase() async {
+    // Bagian ini memeriksa validasi di sisi klien (aplikasi) terlebih dahulu
     final hasInvalidIdentifiers = _invalidIdentifierRows.values.any(
       (s) => s.isNotEmpty,
     );
@@ -552,14 +626,13 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     final hasBrokenRelations = _brokenRelationCells.values.any(
       (map) => map.values.any((set) => set.isNotEmpty),
     );
-    if (hasBrokenRelations && !widget.isCustomTemplate) {
+    if (hasBrokenRelations) {
       _showErrorSnackBar(
         'Masih ada relasi data yang belum valid (ditandai merah). Harap perbaiki.',
       );
       return;
     }
 
-    // [PERUBAHAN] Alur konfirmasi duplikat menggunakan widget baru
     final panelDuplicates = _duplicateRows['panel'];
     if (panelDuplicates != null &&
         panelDuplicates.isNotEmpty &&
@@ -639,6 +712,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
       ),
     );
 
+    // --- [PERBAIKAN UTAMA DI BLOK TRY-CATCH] ---
     try {
       String resultMessage;
       if (widget.isCustomTemplate) {
@@ -658,25 +732,32 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
         resultMessage = "Data berhasil diimpor! 🎉";
       }
 
+      // Jika sukses
       if (mounted) {
-        Navigator.of(context).pop();
-        Navigator.of(context).pop(true);
+        Navigator.of(context).pop(); // Tutup progress dialog
+        Navigator.of(context).pop(true); // Tutup ImportReviewScreen
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(resultMessage),
-            backgroundColor:
-                resultMessage.toLowerCase().contains("gagal") ||
-                    resultMessage.toLowerCase().contains("error")
-                ? AppColors.red
-                : AppColors.schneiderGreen,
+            backgroundColor: AppColors.schneiderGreen,
             behavior: SnackBarBehavior.floating,
           ),
         );
       }
     } catch (e) {
+      // Jika GAGAL (termasuk error validasi dari server)
       if (mounted) {
-        Navigator.of(context).pop();
-        _showErrorSnackBar('Gagal menyimpan data: $e');
+        Navigator.of(context).pop(); // Tutup progress dialog
+
+        final message = e.toString().replaceFirst("Exception: ", "");
+
+        // Tampilkan bottom sheet dengan daftar error
+        showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (_) => _ImportErrorBottomSheet(errorMessage: message),
+        );
       }
     }
   }
@@ -689,6 +770,110 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
         behavior: SnackBarBehavior.floating,
       ),
     );
+  }
+
+  String _normalizeSimple(String name) {
+    return name.toUpperCase().replaceAll(RegExp(r'[^A-Z]'), '');
+  }
+
+  String _normalizeAcronym(String name) {
+    const prefixes = ['PT', 'CV', 'UD'];
+    String cleanedName = name.toUpperCase();
+    for (var prefix in prefixes) {
+      final regex = RegExp(r'^' + prefix + r'\.?\s+', caseSensitive: false);
+      cleanedName = cleanedName.replaceAll(regex, '');
+    }
+
+    if (!cleanedName.contains(' ')) return '';
+
+    return cleanedName
+        .split(' ')
+        .where((part) => part.isNotEmpty)
+        .map((part) => part[0])
+        .join()
+        .toUpperCase();
+  }
+
+  Future<int> _resolveVendorNamesToIds() async {
+    int corrections = 0;
+    if (_allCompanies.isEmpty) return 0;
+
+    final Map<String, Company> simpleNormalizedMap = {
+      for (var company in _allCompanies)
+        _normalizeSimple(company.name): company,
+    };
+
+    final columnsToResolve = {
+      'vendor_id',
+      'panel',
+      'busbar_vendor_id',
+      'busbar',
+      'vendor',
+    };
+
+    _editableData.forEach((tableName, rows) {
+      for (int i = 0; i < rows.length; i++) {
+        final row = rows[i];
+        for (final colName in row.keys) {
+          if (columnsToResolve.contains(colName.toLowerCase())) {
+            final value = (row[colName]?.toString() ?? '').trim();
+            if (value.isEmpty ||
+                (_existingPrimaryKeys['companies']?.contains(value) ?? false)) {
+              continue;
+            }
+
+            Company? matchedCompany;
+
+            final simpleNormalizedValue = _normalizeSimple(value);
+            if (simpleNormalizedMap.containsKey(simpleNormalizedValue)) {
+              matchedCompany = simpleNormalizedMap[simpleNormalizedValue];
+            }
+
+            if (matchedCompany == null) {
+              final acronymNormalizedValue = _normalizeAcronym(value);
+              if (acronymNormalizedValue.isNotEmpty &&
+                  simpleNormalizedMap.containsKey(acronymNormalizedValue)) {
+                matchedCompany = simpleNormalizedMap[acronymNormalizedValue];
+              }
+            }
+
+            if (matchedCompany != null) {
+              _editableData[tableName]![i][colName] = matchedCompany.id;
+              corrections++;
+            }
+          }
+        }
+      }
+    });
+    return corrections;
+  }
+
+  Future<void> _runAutocorrect() async {
+    final corrections = await _resolveVendorNamesToIds();
+
+    if (!mounted) return;
+
+    if (corrections > 0) {
+      _revalidateOnDataChange();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '$corrections relasi data berhasil diperbaiki secara otomatis.',
+          ),
+          backgroundColor: AppColors.schneiderGreen,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Tidak ada relasi data yang dapat diperbaiki secara otomatis.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   @override
@@ -728,6 +913,14 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
               fontWeight: FontWeight.w400,
             ),
           ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.auto_fix_high_outlined),
+              tooltip: 'Perbaiki Relasi Otomatis',
+              onPressed: _runAutocorrect,
+            ),
+            const SizedBox(width: 8),
+          ],
           bottom: PreferredSize(
             preferredSize: const Size.fromHeight(50),
             child: Align(
@@ -811,10 +1004,14 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
         (_invalidIdentifierRows[tableName]?.isNotEmpty ?? false);
     final rowCount = _editableData[tableName]?.length ?? 0;
 
+    bool hasError =
+        hasDuplicates || hasInvalidIdentifiers || (hasBrokenRelations);
+    bool hasWarning = hasBrokenRelations && widget.isCustomTemplate;
+
     Color? indicatorColor;
-    if (hasDuplicates) {
+    if (hasError) {
       indicatorColor = AppColors.red;
-    } else if (hasBrokenRelations || hasInvalidIdentifiers) {
+    } else if (hasWarning) {
       indicatorColor = Colors.orange;
     }
 
@@ -956,7 +1153,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
                 style: TextStyle(fontWeight: FontWeight.w500),
               ),
               Text(
-                "  • ${unrecognizedColumns.join('\n  • ')}",
+                " • ${unrecognizedColumns.join('\n • ')}",
                 style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
               ),
               const Text(
@@ -1036,13 +1233,32 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
                           _invalidIdentifierRows[tableName]?.contains(index) ??
                           false;
 
+                      // Cek apakah ada kolom 'panel' atau 'busbar' yang bermasalah.
+                      final isPanelBusbarProblematic = brokenCells.any((col) {
+                        final normalizedCol = col.toLowerCase();
+                        return (normalizedCol == 'panel' ||
+                                normalizedCol == 'busbar_vendor_id') &&
+                            (rowData[col] as String?)?.isNotEmpty == true;
+                      });
+
                       return DataRow(
                         key: ObjectKey(rowData),
                         color: MaterialStateProperty.resolveWith<Color?>((s) {
-                          if (isDuplicate)
-                            return AppColors.red.withOpacity(0.1);
-                          if (isInvalidIdentifier)
+                          bool hasError =
+                              isDuplicate ||
+                              isInvalidIdentifier ||
+                              (brokenCells.isNotEmpty);
+                          if (hasError) {
+                            return AppColors.red.withOpacity(0.15);
+                          }
+                          if (isPanelBusbarProblematic) {
+                            // Cek tambahan untuk kondisi yang diminta
+                            return AppColors.red.withOpacity(0.15);
+                          }
+                          if (brokenCells.isNotEmpty &&
+                              widget.isCustomTemplate) {
                             return AppColors.orange.withOpacity(0.15);
+                          }
                           return null;
                         }),
                         cells: [
@@ -1053,9 +1269,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
                                 index,
                                 colName,
                                 rowData,
-                                isBroken:
-                                    brokenCells.contains(colName) &&
-                                    !widget.isCustomTemplate,
+                                isBroken: brokenCells.contains(colName),
                               ),
                             ),
                           ),
@@ -1107,6 +1321,92 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     );
   }
 
+  Future<void> _showCompanySelectorForCell(
+    String tableName,
+    int rowIndex,
+    String colName,
+  ) async {
+    final selectedId = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return _CompanySelectorBottomSheet(
+          allCompanies: _allCompanies,
+          initialCompanyId: _editableData[tableName]![rowIndex][colName],
+          onCompanyAdded: () async {
+            await _fetchAllCompanies();
+            await _fetchExistingPrimaryKeys();
+          },
+        );
+      },
+    );
+
+    if (selectedId != null && mounted) {
+      setState(() {
+        _editableData[tableName]![rowIndex][colName] = selectedId;
+        _revalidateOnDataChange();
+      });
+    }
+  }
+
+  Widget _buildCompanySelectorCell(
+    String tableName,
+    int rowIndex,
+    String colName,
+    Map<String, dynamic> rowData, {
+    required bool isBroken,
+  }) {
+    final companyId = rowData[colName]?.toString() ?? '';
+    final companyName = _companyIdToName[companyId] ?? companyId;
+
+    // Periksa apakah kolom 'panel' atau 'busbar' tidak terpilih (companyId kosong)
+    // dan bukan bagian dari template kustom.
+    final bool isNotSelected = companyId.isEmpty;
+    final bool isProblematic =
+        isBroken || (isNotSelected && !widget.isCustomTemplate);
+
+    TextStyle textStyle = TextStyle(
+      fontSize: 12,
+      fontWeight: FontWeight.w300,
+      fontFamily: 'Lexend',
+      color: isProblematic ? AppColors.red : AppColors.black,
+    );
+
+    return InkWell(
+      onTap: () => _showCompanySelectorForCell(tableName, rowIndex, colName),
+      child: Container(
+        width: 180,
+        height: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: isProblematic ? AppColors.red : Colors.transparent,
+              width: 1.0,
+            ),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Text(
+                companyName.isEmpty ? 'Pilih...' : companyName,
+                style: companyName.isEmpty
+                    ? textStyle.copyWith(color: AppColors.gray)
+                    : textStyle,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const Icon(Icons.arrow_drop_down, color: AppColors.gray, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildCellEditor(
     String tableName,
     int rowIndex,
@@ -1114,6 +1414,22 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     Map<String, dynamic> rowData, {
     required bool isBroken,
   }) {
+    final normalizedColName = colName.toLowerCase();
+    final isVendorColumn =
+        (normalizedColName == 'panel' || normalizedColName == 'vendor_id') ||
+        (normalizedColName == 'busbar' ||
+            normalizedColName == 'busbar_vendor_id');
+
+    if (tableName.toLowerCase() == 'panel' && isVendorColumn) {
+      return _buildCompanySelectorCell(
+        tableName,
+        rowIndex,
+        colName,
+        rowData,
+        isBroken: isBroken,
+      );
+    }
+
     TextStyle textStyle = TextStyle(
       fontSize: 12,
       fontWeight: FontWeight.w300,
@@ -1285,8 +1601,8 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
               if (isInvalidIdentifier) ...[
                 _buildInfoAlert(
                   icon: Icons.error_outline,
-                  color: AppColors.orange,
-                  title: "Warning: Identifier Wajib Kosong",
+                  color: AppColors.red,
+                  title: "Error: Identifier Wajib Kosong",
                   details: const Text(
                     'Harap isi salah satu dari kolom "No PP", "No Panel", atau "No WBS".',
                     style: TextStyle(fontSize: 12),
@@ -1622,5 +1938,570 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
       'User': 'Username',
     };
     return pkMap[tableName] ?? '';
+  }
+}
+
+class _CompanySelectorBottomSheet extends StatefulWidget {
+  final List<Company> allCompanies;
+  final String? initialCompanyId;
+  final Future<void> Function() onCompanyAdded;
+
+  const _CompanySelectorBottomSheet({
+    required this.allCompanies,
+    this.initialCompanyId,
+    required this.onCompanyAdded,
+  });
+
+  @override
+  State<_CompanySelectorBottomSheet> createState() =>
+      _CompanySelectorBottomSheetState();
+}
+
+class _CompanySelectorBottomSheetState
+    extends State<_CompanySelectorBottomSheet> {
+  late List<Company> _companies;
+  String? _selectedCompanyId;
+
+  @override
+  void initState() {
+    super.initState();
+    _companies = List.from(widget.allCompanies);
+    _companies.sort((a, b) => a.name.compareTo(b.name));
+    _selectedCompanyId = widget.initialCompanyId;
+  }
+
+  Future<void> _showAddNewCompanySheet() async {
+    final newCompanyData = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => const _AddNewCompanyRoleSheet(),
+    );
+
+    if (newCompanyData != null && mounted) {
+      final String newName = newCompanyData['name'];
+      final AppRole newRole = newCompanyData['role'];
+      final String companyId = newName.toLowerCase().replaceAll(
+        RegExp(r'\s+'),
+        '_',
+      );
+
+      try {
+        final newCompany = Company(id: companyId, name: newName, role: newRole);
+        await DatabaseHelper.instance.insertCompany(newCompany);
+        await widget.onCompanyAdded();
+        if (mounted) {
+          setState(() {
+            _companies.add(newCompany);
+            _companies.sort((a, b) => a.name.compareTo(b.name));
+            _selectedCompanyId = newCompany.id;
+          });
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Gagal menambahkan perusahaan: ${e.toString().replaceFirst("Exception: ", "")}',
+              ),
+              backgroundColor: AppColors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.7,
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              height: 5,
+              width: 40,
+              decoration: BoxDecoration(
+                color: AppColors.grayLight,
+                borderRadius: BorderRadius.circular(100),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          const Text(
+            'Pilih Perusahaan',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500),
+          ),
+          const SizedBox(height: 16),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 12,
+                children: [
+                  ..._companies.map((company) {
+                    return _buildCompanyOptionButton(
+                      name: company.name,
+                      role: company.role.name,
+                      selected: _selectedCompanyId == company.id,
+                      onTap: () {
+                        setState(() => _selectedCompanyId = company.id);
+                      },
+                    );
+                  }),
+                  _buildOtherButton(onTap: _showAddNewCompanySheet),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    side: const BorderSide(color: AppColors.schneiderGreen),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                  child: const Text(
+                    "Batal",
+                    style: TextStyle(
+                      color: AppColors.schneiderGreen,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context, _selectedCompanyId),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    backgroundColor: AppColors.schneiderGreen,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                  child: const Text("Pilih", style: TextStyle(fontSize: 12)),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompanyOptionButton({
+    required String name,
+    required String role,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final Color borderColor = selected
+        ? AppColors.schneiderGreen
+        : AppColors.grayLight;
+    final Color color = selected
+        ? AppColors.schneiderGreen.withOpacity(0.08)
+        : Colors.white;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: color,
+          border: Border.all(color: borderColor),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Text(
+              name,
+              style: const TextStyle(
+                fontWeight: FontWeight.w400,
+                fontSize: 12,
+                color: AppColors.black,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Chip(
+              label: Text(
+                role[0].toUpperCase() + role.substring(1),
+                style: const TextStyle(fontSize: 10, color: AppColors.gray),
+              ),
+              backgroundColor: AppColors.grayLight,
+              padding: EdgeInsets.zero,
+              labelPadding: const EdgeInsets.symmetric(horizontal: 6),
+              visualDensity: VisualDensity.compact,
+              side: BorderSide.none,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOtherButton({required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: AppColors.grayLight),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Text(
+          "Lainnya...",
+          style: TextStyle(
+            fontWeight: FontWeight.w400,
+            fontSize: 12,
+            color: AppColors.gray,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AddNewCompanyRoleSheet extends StatefulWidget {
+  const _AddNewCompanyRoleSheet();
+  @override
+  State<_AddNewCompanyRoleSheet> createState() =>
+      _AddNewCompanyRoleSheetState();
+}
+
+class _AddNewCompanyRoleSheetState extends State<_AddNewCompanyRoleSheet> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  AppRole _selectedRole = AppRole.k3;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (_formKey.currentState!.validate()) {
+      Navigator.pop(context, {
+        'name': _nameController.text.trim(),
+        'role': _selectedRole,
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(
+        20,
+        16,
+        20,
+        MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                height: 5,
+                width: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.grayLight,
+                  borderRadius: BorderRadius.circular(100),
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              "Tambah Perusahaan Baru",
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500),
+            ),
+            const SizedBox(height: 24),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Company',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w400),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  cursorColor: AppColors.schneiderGreen,
+                  controller: _nameController,
+                  autofocus: true,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w300,
+                    color: AppColors.black,
+                  ),
+                  validator: (v) => (v == null || v.isEmpty)
+                      ? 'Nama tidak boleh kosong'
+                      : null,
+                  decoration: InputDecoration(
+                    fillColor: AppColors.white,
+                    filled: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: AppColors.grayLight),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: AppColors.grayLight),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(
+                        color: AppColors.schneiderGreen,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            _buildRoleSelector(),
+            const SizedBox(height: 32),
+            _buildActionButtons(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRoleSelector() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Role',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w400),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 12,
+          children: AppRole.values.map((role) {
+            if (role == AppRole.admin) return const SizedBox.shrink();
+            return _buildOptionButton(
+              label: role.name[0].toUpperCase() + role.name.substring(1),
+              selected: _selectedRole == role,
+              onTap: () => setState(() => _selectedRole = role),
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildOptionButton({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final Color borderColor = selected
+        ? AppColors.schneiderGreen
+        : AppColors.grayLight;
+    final Color color = selected
+        ? AppColors.schneiderGreen.withOpacity(0.08)
+        : Colors.white;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: color,
+          border: Border.all(color: borderColor),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontWeight: FontWeight.w400,
+            fontSize: 12,
+            color: AppColors.black,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActionButtons() {
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton(
+            onPressed: () => Navigator.pop(context),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              side: const BorderSide(color: AppColors.schneiderGreen),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+            child: const Text(
+              "Batal",
+              style: TextStyle(color: AppColors.schneiderGreen, fontSize: 12),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: ElevatedButton(
+            onPressed: _save,
+            style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              backgroundColor: AppColors.schneiderGreen,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+            child: const Text("Simpan", style: TextStyle(fontSize: 12)),
+          ),
+        ),
+      ],
+    );
+  }
+}
+// Lokasi: lib/import_review_screen.dart
+// Tambahkan class ini di paling bawah file
+
+class _ImportErrorBottomSheet extends StatelessWidget {
+  final String errorMessage;
+
+  const _ImportErrorBottomSheet({required this.errorMessage});
+
+  @override
+  Widget build(BuildContext context) {
+    // Memisahkan judul dari daftar error
+    final parts = errorMessage.split('\n- ');
+    final title = parts.first.replaceAll(
+      'Impor dibatalkan karena error berikut:',
+      'Validasi Gagal',
+    );
+    final errors = parts.length > 1 ? parts.sublist(1) : <String>[];
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.6,
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              height: 5,
+              width: 40,
+              decoration: BoxDecoration(
+                color: AppColors.grayLight,
+                borderRadius: BorderRadius.circular(100),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w500,
+              color: AppColors.red,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Harap perbaiki masalah berikut di dalam tabel sebelum menyimpan kembali:',
+            style: TextStyle(
+              color: AppColors.gray,
+              fontSize: 12,
+              fontWeight: FontWeight.w300,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color: AppColors.red.withOpacity(0.05),
+                border: Border.all(color: AppColors.red.withOpacity(0.2)),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(
+                  vertical: 8,
+                  horizontal: 12,
+                ),
+                itemCount: errors.length,
+                separatorBuilder: (context, index) =>
+                    const Divider(height: 12, color: Colors.transparent),
+                itemBuilder: (context, index) {
+                  return Text(
+                    '• ${errors[index]}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.red,
+                      fontWeight: FontWeight.w400,
+                      height: 1.5,
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                backgroundColor: AppColors.schneiderGreen,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(6),
+                ),
+              ),
+              child: const Text(
+                "Perbaiki Sekarang",
+                style: TextStyle(fontSize: 12),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
