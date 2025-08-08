@@ -188,10 +188,14 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
     if (_formKey.currentState!.validate()) {
       setState(() => _isLoading = true);
 
-      _panel.startDate = _selectedDate;
-      _panel.targetDelivery = _selectedTargetDeliveryDate;
-      // Cek No. PP jika diubah
-      if (noPp.isNotEmpty && noPp != widget.panelData.panel.noPp) {
+      // --- [LOGIKA BARU DIMULAI DI SINI] ---
+
+      // 1. Simpan No. PP yang asli sebelum diubah untuk proses hapus nanti.
+      final String originalNoPp = widget.panelData.panel.noPp;
+      final bool isPpChanged = noPp.isNotEmpty && noPp != originalNoPp;
+
+      // 2. Lakukan validasi jika No. PP yang baru sudah ada di database.
+      if (isPpChanged) {
         final isTaken = await DatabaseHelper.instance.isNoPpTaken(noPp);
         if (isTaken) {
           if (mounted) {
@@ -206,12 +210,12 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
           return;
         }
       }
-      // --- [AKHIR PERUBAHAN] ---
 
+      // 3. Update semua properti di objek _panel dengan data dari form.
       _panel.noPanel = noPanel;
       _panel.noWbs = noWbs;
       _panel.project = project;
-      _panel.noPp = noPp;
+      _panel.noPp = noPp; // _panel.noPp sekarang berisi nilai baru
       _panel.percentProgress =
           double.tryParse(_progressController.text.trim()) ?? 0.0;
       _panel.startDate = _selectedDate;
@@ -237,6 +241,11 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
 
       try {
         await DatabaseHelper.instance.updatePanel(_panel);
+
+        if (isPpChanged) {
+          await DatabaseHelper.instance.deletePanel(originalNoPp);
+        }
+
         if (_isAdmin) {
           if (_selectedBusbarVendorId != null) {
             await DatabaseHelper.instance.upsertBusbar(
@@ -282,7 +291,6 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
         if (mounted) {
           setState(() => _isLoading = false);
 
-          // --- [PERUBAHAN] Pesan error fallback lebih spesifik ---
           String errorMessage;
           final errorString = e.toString().toLowerCase();
           if (errorString.contains('duplicate key')) {
@@ -297,13 +305,13 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
               errorMessage = 'Gagal: Terdapat data duplikat.';
             }
           } else {
-            errorMessage = 'Gagal menyimpan: Terjadi kesalahan tidak terduga.';
+            errorMessage =
+                'Gagal menyimpan: Terjadi kesalahan tidak terduga. ${e.toString()}';
           }
 
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(errorMessage), backgroundColor: Colors.red),
           );
-          // --- [AKHIR PERUBAHAN] ---
         }
       }
     }

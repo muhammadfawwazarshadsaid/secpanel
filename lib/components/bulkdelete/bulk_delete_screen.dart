@@ -41,7 +41,8 @@ class _BulkDeleteBottomSheetState extends State<BulkDeleteBottomSheet> {
     setState(() => _isLoading = true);
     try {
       final panelsData = await DatabaseHelper.instance.getAllPanelsForDisplay(
-        currentUser: null,
+        currentUser: null, // Tetap null untuk mengambil semua data
+        rawIds: true, // Ini akan meminta No. PP yang asli (TEMP_PP_...)
       );
       if (mounted) {
         setState(() {
@@ -355,7 +356,13 @@ class _BulkDeleteBottomSheetState extends State<BulkDeleteBottomSheet> {
                                       },
                                 cells: [
                                   DataCell(Text(panel.noPanel ?? '-')),
-                                  DataCell(Text(panel.noPp)),
+                                  DataCell(
+                                    Text(
+                                      panel.noPp.startsWith("TEMP_PP_")
+                                          ? ''
+                                          : panel.noPp,
+                                    ),
+                                  ),
                                   DataCell(Text(panel.project ?? '-')),
                                   DataCell(Text(data.panelVendorName)),
                                   DataCell(

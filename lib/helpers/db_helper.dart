@@ -1823,6 +1823,7 @@ class DatabaseHelper {
     DateTimeRange? startDateRange,
     DateTimeRange? deliveryDateRange,
     DateTimeRange? closedDateRange,
+    bool rawIds = false,
   }) async {
     Map<String, String> queryParams = {};
     if (currentUser != null) {
@@ -1856,7 +1857,9 @@ class DatabaseHelper {
           .toUtc()
           .toIso8601String();
     }
-
+    if (rawIds) {
+      queryParams['raw_ids'] = 'true';
+    }
     final uri = Uri.parse(
       '$_baseUrl/panels',
     ).replace(queryParameters: queryParams);
