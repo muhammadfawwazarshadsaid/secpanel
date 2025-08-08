@@ -1928,13 +1928,25 @@ class DatabaseHelper {
   }
 
   Future<List<Company>> getAllCompanies() async {
-    final List<dynamic> data = await _apiRequest('GET', '/companies');
-    return data.map((e) => Company.fromMap(e)).toList();
+    final dynamic data = await _apiRequest('GET', '/companies');
+
+    // [PERBAIKAN] Cek jika data null, kembalikan list kosong
+    if (data == null || data is! List) {
+      return [];
+    }
+
+    return (data as List).map((e) => Company.fromMap(e)).toList();
   }
 
   Future<List<CompanyAccount>> getAllCompanyAccounts() async {
-    final List<dynamic> data = await _apiRequest('GET', '/accounts');
-    return data.map((e) => CompanyAccount.fromMap(e)).toList();
+    final dynamic data = await _apiRequest('GET', '/accounts');
+
+    // [PERBAIKAN] Cek jika data null, kembalikan list kosong
+    if (data == null || data is! List) {
+      return [];
+    }
+
+    return (data as List).map((e) => CompanyAccount.fromMap(e)).toList();
   }
 
   Future<List<Map<String, dynamic>>> getAllUserAccountsForDisplay() async {
@@ -2013,8 +2025,14 @@ class DatabaseHelper {
   }
 
   Future<List<Panel>> getAllPanels() async {
-    final List<dynamic> data = await _apiRequest('GET', '/panels/all');
-    return data.map((map) => Panel.fromMap(map)).toList();
+    final dynamic data = await _apiRequest('GET', '/panels/all');
+
+    // [PERBAIKAN] Cek jika data null, kembalikan list kosong
+    if (data == null || data is! List) {
+      return [];
+    }
+
+    return (data as List).map((map) => Panel.fromMap(map)).toList();
   }
 
   Future<Panel?> getPanelByNoPp(String noPp) async {
@@ -2043,18 +2061,27 @@ class DatabaseHelper {
   }
 
   Future<List<Component>> getAllComponents() async {
-    final List<dynamic> data = await _apiRequest('GET', '/components');
-    return data.map((map) => Component.fromMap(map)).toList();
+    final dynamic data = await _apiRequest('GET', '/components');
+    if (data == null || data is! List) return [];
+    return (data as List).map((map) => Component.fromMap(map)).toList();
   }
 
   Future<List<Palet>> getAllPalet() async {
-    final List<dynamic> data = await _apiRequest('GET', '/palets');
-    return data.map((map) => Palet.fromMap(map)).toList();
+    final dynamic data = await _apiRequest('GET', '/palets');
+    if (data == null || data is! List) return [];
+    return (data as List).map((map) => Palet.fromMap(map)).toList();
   }
 
   Future<List<Corepart>> getAllCorepart() async {
-    final List<dynamic> data = await _apiRequest('GET', '/coreparts');
-    return data.map((map) => Corepart.fromMap(map)).toList();
+    final dynamic data = await _apiRequest('GET', '/coreparts');
+    if (data == null || data is! List) return [];
+    return (data as List).map((map) => Corepart.fromMap(map)).toList();
+  }
+
+  Future<List<Busbar>> getAllBusbars() async {
+    final dynamic data = await _apiRequest('GET', '/busbars');
+    if (data == null || data is! List) return [];
+    return (data as List).map((map) => Busbar.fromMap(map)).toList();
   }
 
   Future<void> upsertBusbarRemarkandVendor({
@@ -2073,9 +2100,12 @@ class DatabaseHelper {
     );
   }
 
-  Future<List<Busbar>> getAllBusbars() async {
-    final List<dynamic> data = await _apiRequest('GET', '/busbars');
-    return data.map((map) => Busbar.fromMap(map)).toList();
+  Future<List<Map<String, dynamic>>> getPanelKeys() async {
+    final dynamic data = await _apiRequest('GET', '/panels/keys');
+    if (data == null || data is! List) {
+      return [];
+    }
+    return List<Map<String, dynamic>>.from(data);
   }
 
   Future<Map<String, List<dynamic>>> getFilteredDataForExport(

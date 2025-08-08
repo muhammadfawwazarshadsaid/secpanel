@@ -41,7 +41,7 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
   late final TextEditingController _progressController;
 
   late Panel _panel;
-  late DateTime _selectedDate;
+  late DateTime? _selectedDate;
   late DateTime? _selectedTargetDeliveryDate;
   late String? _selectedK3VendorId;
   late bool _isSent;
@@ -90,8 +90,9 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
     _progressController = TextEditingController(
       text: _panel.percentProgress?.toInt().toString() ?? '0',
     );
-    _selectedDate = _panel.startDate ?? DateTime.now();
+    _selectedDate = _panel.startDate;
     _selectedTargetDeliveryDate = _panel.targetDelivery;
+
     _selectedK3VendorId = _panel.vendorId;
     _isSent = _panel.isClosed;
 
@@ -187,6 +188,8 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
     if (_formKey.currentState!.validate()) {
       setState(() => _isLoading = true);
 
+      _panel.startDate = _selectedDate;
+      _panel.targetDelivery = _selectedTargetDeliveryDate;
       // Cek No. PP jika diubah
       if (noPp.isNotEmpty && noPp != widget.panelData.panel.noPp) {
         final isTaken = await DatabaseHelper.instance.isNoPpTaken(noPp);
@@ -851,29 +854,25 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
 
   Widget _buildDateTimePicker() {
     Future<void> pickDateTime() async {
+      final now = DateTime.now();
+      // Jika tanggal belum ada, mulai dari hari ini. Jika sudah ada, mulai dari tanggal yg dipilih.
+      final initialPickerDate = _selectedDate ?? now;
+
       final date = await showDatePicker(
         context: context,
-        initialDate: _selectedDate,
+        initialDate: initialPickerDate,
         firstDate: DateTime(2000),
         lastDate: DateTime(2101),
-        initialEntryMode: DatePickerEntryMode.calendarOnly,
-        builder: (context, child) => Theme(
-          data: ThemeData.light().copyWith(
-            colorScheme: const ColorScheme.light(
-              primary: AppColors.schneiderGreen,
-              onPrimary: Colors.white,
-              onSurface: AppColors.black,
-            ),
-          ),
-          child: child!,
-        ),
+        // ... (builder theme tetap sama)
       );
       if (date == null) return;
+
       final time = await showTimePicker(
         context: context,
-        initialTime: TimeOfDay.fromDateTime(_selectedDate),
+        initialTime: TimeOfDay.fromDateTime(initialPickerDate),
       );
       if (time == null) return;
+
       setState(
         () => _selectedDate = DateTime(
           date.year,
@@ -910,11 +909,17 @@ class _EditPanelBottomSheetState extends State<EditPanelBottomSheet> {
                   color: AppColors.gray,
                 ),
                 const SizedBox(width: 8),
+                // [PERBAIKAN] Tampilkan teks berbeda jika tanggal kosong
                 Text(
-                  DateFormat('d MMM yyyy HH:mm').format(_selectedDate),
-                  style: const TextStyle(
+                  _selectedDate != null
+                      ? DateFormat('d MMM yyyy HH:mm').format(_selectedDate!)
+                      : 'Pilih Tanggal & Waktu',
+                  style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w300,
+                    color: _selectedDate != null
+                        ? AppColors.black
+                        : AppColors.gray,
                   ),
                 ),
               ],

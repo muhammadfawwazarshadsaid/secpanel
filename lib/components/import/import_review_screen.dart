@@ -147,6 +147,7 @@ class _DuplicateConfirmationBottomSheet extends StatelessWidget {
 class _ValidationResult {
   final List<String> missing;
   final List<String> unrecognized;
+
   _ValidationResult({required this.missing, required this.unrecognized});
 }
 
@@ -170,7 +171,8 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
   late Map<String, Map<int, Set<String>>> _brokenRelationCells;
   late Map<String, Set<int>> _invalidIdentifierRows;
   bool _isLoading = true;
-
+  late List<Map<String, dynamic>> _existingPanelKeys;
+  late Map<String, Set<int>> _updateRows;
   late Map<String, Set<String>> _existingPrimaryKeys;
   List<Company> _allCompanies = [];
   Map<String, String> _companyIdToName = {};
@@ -209,20 +211,35 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     _duplicateRows = {};
     _brokenRelationCells = {};
     _invalidIdentifierRows = {};
+    _existingPanelKeys = [];
+    _updateRows = {};
     _initializeAndValidateData();
+  }
+
+  Future<void> _fetchExistingNaturalKeys() async {
+    _existingPanelKeys = await DatabaseHelper.instance.getPanelKeys();
   }
 
   Future<void> _initializeAndValidateData() async {
     if (mounted) setState(() => _isLoading = true);
 
+    _cleanNumericPrimaryKeys();
     await _fetchAllCompanies();
     await _fetchExistingPrimaryKeys();
+    await _fetchExistingNaturalKeys(); // <-- PANGGIL FUNGSI BARU DI SINI
 
     await _resolveVendorNamesToIds();
-
-    _revalidateOnDataChange();
-
+    _revalidateOnDataChange(); // <-- Ganti ini menjadi _revalidateAll()
     if (mounted) setState(() => _isLoading = false);
+  }
+
+  // Ganti nama _revalidateOnDataChange menjadi _revalidateAll
+  void _revalidateAll() {
+    setState(() {
+      _validateUpdatesAndDuplicates(); // <-- Ganti ini
+      _validateBrokenRelations();
+      _validateMissingIdentifiers();
+    });
   }
 
   Future<void> _fetchAllCompanies() async {
@@ -300,101 +317,103 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
     return null;
   }
 
-  void _validateDuplicates() {
+  void _validateUpdatesAndDuplicates() {
     _duplicateRows = {};
+    _updateRows = {};
+    final String tableName = 'panel';
 
-    // --- LOGIKA BARU UNTUK SEMUA JENIS TABEL ---
-    for (final tableName in _editableData.keys) {
-      final rows = _editableData[tableName]!;
-      if (rows.isEmpty) continue;
+    if (!_editableData.containsKey(tableName)) return;
 
-      _duplicateRows.putIfAbsent(tableName, () => <int>{});
+    final rows = _editableData[tableName]!;
+    if (rows.isEmpty) return;
 
-      // Sesuaikan nama tabel DB untuk lookup di _existingPrimaryKeys
-      final dbTableName = (tableName.toLowerCase() == 'panel')
-          ? 'panels'
-          : (tableName.toLowerCase() == 'user')
-          ? 'company_accounts'
-          : tableName.toLowerCase();
+    _duplicateRows.putIfAbsent(tableName, () => {});
+    _updateRows.putIfAbsent(tableName, () => {});
 
-      final pksInDb = _existingPrimaryKeys[dbTableName] ?? {};
-      final pksInFileToRows = <String, List<int>>{};
-      final bool isComposite = [
-        'busbars',
-        'components',
-        'palet',
-        'corepart',
-      ].contains(dbTableName);
-
-      final actualColumns = rows.first.keys.toList();
-      final pkColumn = isComposite
-          ? null
-          : _findPrimaryKeyColumnName(tableName, actualColumns);
-
-      // --- TAHAP 1: Kumpulkan, Kelompokkan, dan Cek ke DB ---
-      for (int i = 0; i < rows.length; i++) {
-        String? pkValueNormalized;
-
-        if (isComposite) {
-          final row = rows[i];
-          final panelNoPp = row['panel_no_pp']?.toString() ?? '';
-          final vendor = row['vendor']?.toString() ?? '';
-          if (panelNoPp.isNotEmpty && vendor.isNotEmpty) {
-            pkValueNormalized = "${panelNoPp}_${vendor}";
-          }
-        } else if (pkColumn != null) {
-          final pkValueRaw = rows[i][pkColumn]?.toString() ?? '';
-          pkValueNormalized = pkValueRaw.trim().toLowerCase();
-        }
-
-        if (pkValueNormalized != null && pkValueNormalized.isNotEmpty) {
-          // Langsung tandai jika sudah ada di database
-          if (pksInDb.contains(pkValueNormalized)) {
-            _duplicateRows[tableName]!.add(i);
-          }
-          // Kelompokkan semua baris berdasarkan kuncinya untuk cek duplikasi internal file
-          pksInFileToRows.putIfAbsent(pkValueNormalized, () => []).add(i);
-        }
-      }
-
-      // --- TAHAP 2: Tandai semua baris dalam grup yang duplikat ---
-      for (final entry in pksInFileToRows.entries) {
-        // Jika sebuah kunci primer muncul di lebih dari satu baris
-        if (entry.value.length > 1) {
-          // Tandai semua baris tersebut sebagai duplikat
-          _duplicateRows[tableName]!.addAll(entry.value);
-        }
+    // Buat lookup map dari kunci alami untuk pencarian cepat
+    final naturalKeyToDbRow = <String, Map<String, dynamic>>{};
+    for (final keyInfo in _existingPanelKeys) {
+      final panelNo = keyInfo['no_panel']?.toString().toLowerCase() ?? '';
+      final project = keyInfo['project']?.toString().toLowerCase() ?? '';
+      final wbs = keyInfo['no_wbs']?.toString().toLowerCase() ?? '';
+      if (panelNo.isNotEmpty || project.isNotEmpty || wbs.isNotEmpty) {
+        naturalKeyToDbRow["${panelNo}_${project}_${wbs}"] = keyInfo;
       }
     }
 
-    // --- LOOPING KEDUA (KHUSUS UNTUK COMPOSITE KEYS) ---
-    final List<String> compositeKeyTables = [
-      'busbars',
-      'components',
-      'palet',
-      'corepart',
-    ];
-    for (final tableName in compositeKeyTables) {
-      if (!_editableData.containsKey(tableName) ||
-          _editableData[tableName]!.isEmpty)
+    for (int i = 0; i < rows.length; i++) {
+      final row = rows[i];
+      final newNoPp =
+          row[_findPrimaryKeyColumnName(tableName, row.keys.toList()) ?? '']
+              ?.toString()
+              .trim()
+              .toLowerCase() ??
+          '';
+      final noPanel = row['Panel No']?.toString().toLowerCase() ?? '';
+      final project = row['PROJECT']?.toString().toLowerCase() ?? '';
+      final wbs = row['WBS']?.toString().toLowerCase() ?? '';
+
+      final naturalKey = "${noPanel}_${project}_${wbs}";
+
+      // Cek duplikasi berdasarkan No PP asli
+      if (newNoPp.isNotEmpty &&
+          _existingPrimaryKeys['panels']!.contains(newNoPp)) {
+        _duplicateRows[tableName]!.add(i);
         continue;
+      }
 
-      _duplicateRows.putIfAbsent(tableName, () => <int>{});
-      final rows = _editableData[tableName]!;
-      final existingCompositeKeys =
-          _existingPrimaryKeys[tableName] ?? <String>{};
-      final seenKeysInFile = <String>{};
+      // Cek berdasarkan kunci alami
+      if (naturalKeyToDbRow.containsKey(naturalKey)) {
+        final dbRow = naturalKeyToDbRow[naturalKey]!;
+        final existingNoPp = dbRow['no_pp']?.toString().toLowerCase() ?? '';
 
-      for (int i = 0; i < rows.length; i++) {
-        final row = rows[i];
-        final panelNoPp = row['panel_no_pp']?.toString() ?? '';
-        final vendor = row['vendor']?.toString() ?? '';
-        if (panelNoPp.isNotEmpty && vendor.isNotEmpty) {
-          final compositeKey = "${panelNoPp}_${vendor}";
-          if (existingCompositeKeys.contains(compositeKey) ||
-              !seenKeysInFile.add(compositeKey)) {
-            _duplicateRows[tableName]!.add(i);
-          }
+        // KASUS UPDATE (HIJAU)
+        if (existingNoPp.startsWith('temp_pp_') &&
+            newNoPp.isNotEmpty &&
+            !newNoPp.startsWith('temp_pp_')) {
+          _updateRows[tableName]!.add(i);
+        }
+        // KASUS DUPLIKAT (MERAH)
+        else {
+          _duplicateRows[tableName]!.add(i);
+        }
+      }
+    }
+  }
+
+  void _cleanNumericPrimaryKeys() {
+    // Kita hanya menargetkan sheet/tabel 'panel'
+    final String tableName = 'panel';
+    if (!_editableData.containsKey(tableName) ||
+        _editableData[tableName]!.isEmpty) {
+      return;
+    }
+
+    final rows = _editableData[tableName]!;
+    // Cari nama kolom Primary Key secara dinamis ('PP Panel' atau 'no_pp')
+    final pkColumn = _findPrimaryKeyColumnName(
+      tableName,
+      rows.first.keys.toList(),
+    );
+
+    if (pkColumn == null) {
+      return; // Jika kolom PK tidak ditemukan, hentikan proses
+    }
+
+    // Iterasi setiap baris dan bersihkan nilai PK
+    for (final row in rows) {
+      final pkValue = row[pkColumn];
+
+      // Cek jika nilainya sudah berupa angka (hasil parse Excel)
+      if (pkValue is num) {
+        row[pkColumn] = pkValue.toInt().toString();
+      }
+      // Cek jika nilainya berupa string yang terlihat seperti angka desimal
+      else if (pkValue is String) {
+        final numValue = double.tryParse(pkValue);
+        // Cek ini memastikan kita hanya mengubah angka seperti "123.0" menjadi "123"
+        if (numValue != null && numValue == numValue.truncate()) {
+          row[pkColumn] = numValue.toInt().toString();
         }
       }
     }
@@ -504,7 +523,7 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
 
   void _revalidateOnDataChange() {
     setState(() {
-      _validateDuplicates();
+      _validateUpdatesAndDuplicates();
       _validateBrokenRelations();
       _validateMissingIdentifiers();
     });
@@ -1225,8 +1244,11 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
                     ],
                     rows: List.generate(rows.length, (index) {
                       final rowData = rows[index];
+
                       final isDuplicate =
                           _duplicateRows[tableName]?.contains(index) ?? false;
+                      final isUpdate =
+                          _updateRows[tableName]?.contains(index) ?? false;
                       final brokenCells =
                           _brokenRelationCells[tableName]?[index] ?? <String>{};
                       final isInvalidIdentifier =
@@ -1244,6 +1266,11 @@ class _ImportReviewScreenState extends State<ImportReviewScreen> {
                       return DataRow(
                         key: ObjectKey(rowData),
                         color: MaterialStateProperty.resolveWith<Color?>((s) {
+                          // [PERBAIKAN] Tambahkan kondisi untuk warna hijau
+                          if (isUpdate) {
+                            return Colors.green.withOpacity(0.15);
+                          }
+
                           bool hasError =
                               isDuplicate ||
                               isInvalidIdentifier ||

@@ -241,6 +241,9 @@ class PanelProgressCard extends StatelessWidget {
     final bool isFuture =
         startDate != null && startDate!.isAfter(DateTime.now());
     final String durationLabel = isFuture ? "Mulai Dalam" : "Durasi Proses";
+    final String displayDuration = startDate == null
+        ? "Belum Diatur"
+        : duration;
 
     return Column(
       children: [
@@ -284,7 +287,7 @@ class PanelProgressCard extends StatelessWidget {
                                 ),
                               ),
                               Text(
-                                duration,
+                                displayDuration,
                                 style: const TextStyle(
                                   color: AppColors.black,
                                   fontWeight: FontWeight.w400,
